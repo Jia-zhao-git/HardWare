@@ -31,6 +31,8 @@ interface DataPoint {
   battery: number
   cpuTemp: number
   batTemp: number
+  memUsedGb?: number
+  memTotalGb?: number
 }
 
 const INTERVALS = [
@@ -107,17 +109,16 @@ export default function PerfPage({
         const usr = parseFloat(r.cpu_usr) || 0
         const sys = parseFloat(r.cpu_sys) || 0
         const cpu = Math.min(usr + sys, 100)
-        const memAvail = r.mem_available || 1
-        const memFree   = r.mem_free || 0
-        const memUsed  = memAvail - memFree
-        const memPct   = (memUsed / memAvail) * 100
+        const memPct   = r.mem_total_gb ? (parseFloat(r.mem_used_gb || '0') / parseFloat(r.mem_total_gb) * 100) : 0
         const cpuTemp  = (r.cpu_temp || 0) / 1000
         const batTemp  = (r.battery_temp || 0) / 10
         const battery  = r.battery_capacity || 0
+        const memUsedGb = parseFloat(r.mem_used_gb || '0')
+        const memTotalGb = parseFloat(r.mem_total_gb || '0')
         const now = new Date()
         const t = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`
 
-        const point: DataPoint = { time: t, t: now.getTime(), cpu, mem: memPct, battery, cpuTemp, batTemp }
+        const point: DataPoint = { time: t, t: now.getTime(), cpu, mem: memPct, battery, cpuTemp, batTemp, memUsedGb, memTotalGb }
         
         // 更新本地状态（限制最大 5000 条数据，防止内存溢出）
         setLive(point)
@@ -249,7 +250,7 @@ export default function PerfPage({
 
   const lines = chartLines[chartType]
   const needRightAxis = chartType === 'all' || chartType === 'temp'
-  const totalMem = live ? (live.mem * 0.01 * (1024 * 1024)) : 1
+  const totalMemGb = live?.memTotalGb ?? 0
   const durationMin = data.length > 0 ? ((data[data.length - 1].t - data[0].t) / 60000).toFixed(1) : '0'
 
   return (
@@ -385,24 +386,49 @@ export default function PerfPage({
 
         <div className="card">
           <div className="card-title">内存详情</div>
-          {live && (
-            <>
-              <div className="info-row"><span className="info-label">已用内存</span>
-                <span className="info-value">{((live.mem / 100) * (totalMem / 1024)).toFixed(1)} GB</span>
+          {live ? (
+            <div className="mem-detail-grid">
+              <div className="mem-detail-item">
+                <span className="mem-detail-value">{live.memTotalGb ? `${live.memTotalGb} GB` : '-'}</span>
+                <span className="mem-detail-label">总内存</span>
               </div>
-              <div className="info-row"><span className="info-label">内存占用</span>
-                <span className="info-value">{live.mem.toFixed(1)}%</span>
+              <div className="mem-detail-item">
+                <span className="mem-detail-value" style={{ color: live.mem > 80 ? 'var(--accent-error)' : 'var(--accent-primary)' }}>
+                  {live.memUsedGb != null ? `${live.memUsedGb} GB` : '-'}
+                </span>
+                <span className="mem-detail-label">已用内存</span>
               </div>
-              <div style={{ marginTop: 12 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>
-                  <span>占用</span><span>{live.mem.toFixed(1)}%</span>
+              <div className="mem-detail-item">
+                <span className="mem-detail-value">{(live.memTotalGb != null && live.memUsedGb != null) ? `${(live.memTotalGb - live.memUsedGb).toFixed(2)} GB` : '-'}</span>
+                <span className="mem-detail-label">可用内存</span>
+              </div>
+              <div className="mem-detail-item">
+                <span className="mem-detail-value" style={{ color: live.mem > 80 ? 'var(--accent-error)' : live.mem > 60 ? 'var(--accent-warning)' : 'var(--accent-secondary)' }}>
+                  {live.mem.toFixed(1)}%
+                </span>
+                <span className="mem-detail-label">占用率</span>
+              </div>
+              <div className="mem-detail-bar">
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                  <span>内存使用</span>
+                  <span style={{ color: live.mem > 80 ? 'var(--accent-error)' : 'var(--text-secondary)' }}>{live.mem.toFixed(1)}%</span>
                 </div>
-                <div className="progress-bar" style={{ height: 8 }}>
-                  <div className={`progress-fill ${live.mem > 80 ? 'red' : 'blue'}`}
-                    style={{ width: `${live.mem}%`, transition: 'width 0.5s' }} />
+                <div className="progress-bar" style={{ height: 10, borderRadius: 5 }}>
+                  <div className={`progress-fill ${live.mem > 80 ? 'red' : live.mem > 60 ? 'yellow' : 'green'}`}
+                    style={{ width: `${Math.min(live.mem, 100)}%`, transition: 'width 0.5s ease' }} />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
+                  <span>0%</span>
+                  <span>50%</span>
+                  <span>100%</span>
                 </div>
               </div>
-            </>
+            </div>
+          ) : (
+            <div className="empty-state" style={{ padding: 30 }}>
+              <div className="empty-text">暂无数据</div>
+              <div className="empty-sub">开始监控后显示内存详情</div>
+            </div>
           )}
         </div>
       </div>

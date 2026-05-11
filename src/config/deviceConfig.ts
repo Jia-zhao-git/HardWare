@@ -272,6 +272,22 @@ export const deviceConfig = [
     }
   },
   {
+    name: '词典笔X7P长续航版',
+    category: 'pen',
+    image: 'https://ydschool-video.nosdn.127.net/17725259505958.png',
+    skuPatterns: ['OVERHEAD_Y02-1', 'Y02-1'],
+    specs: {
+      sku: 'OVERHEAD_Y02-1_SKU_CHN_PLUS',
+      codeName: 'Y02-1',
+      cpu: 'RK3562',
+      storage: '64GB',
+      ram: '1GB',
+      display: '4.1英寸',
+      battery: '1406mAh',
+      wifi: '恒玄 BES2600',
+    }
+  },
+  {
     name: '答疑笔 space one',
     category: 'pen',
     image: 'https://ydschool-video.nosdn.127.net/177252595199112.png',
@@ -439,14 +455,49 @@ export function getDeviceBySku(sku: string) {
   if (skuCache.has(sku)) return skuCache.get(sku);
   
   const skuUpper = sku.toUpperCase();
-  const device = deviceConfig.find(d =>
-    d.skuPatterns.some(pattern => skuUpper.includes(pattern.toUpperCase())) ||
-    d.specs.codeName.toUpperCase().includes(skuUpper) ||
-    skuUpper.includes(d.specs.codeName.toUpperCase())
-  );
   
-  skuCache.set(sku, device || null);
-  return device || null;
+  // First pass: Try to find exact or more specific matches
+  // Sort by pattern length (longer patterns are more specific) and check them first
+  let bestMatch: any = null;
+  let bestScore = 0;
+  
+  for (const device of deviceConfig) {
+    let score = 0;
+    
+    // Check skuPatterns with priority scoring
+    for (const pattern of device.skuPatterns) {
+      const patternUpper = pattern.toUpperCase();
+      
+      // Exact match gets highest score
+      if (skuUpper === patternUpper) {
+        score = Math.max(score, 1000);
+      }
+      // Pattern contains hyphen (more specific) gets higher score
+      else if (pattern.includes('-') && skuUpper.includes(patternUpper)) {
+        score = Math.max(score, 500 + pattern.length);
+      }
+      // Regular includes match
+      else if (skuUpper.includes(patternUpper)) {
+        score = Math.max(score, pattern.length);
+      }
+    }
+    
+    // Check codeName matches
+    const codeNameUpper = device.specs.codeName.toUpperCase();
+    if (skuUpper.includes(codeNameUpper) || codeNameUpper.includes(skuUpper)) {
+      // Give lower priority to codeName matches
+      score = Math.max(score, codeNameUpper.includes('-') ? 200 : 100);
+    }
+    
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = device;
+    }
+  }
+  
+  const result = bestScore > 0 ? bestMatch : null;
+  skuCache.set(sku, result);
+  return result;
 }
 
 // Get device image
@@ -464,4 +515,31 @@ export function clearSkuCache() {
   skuCache.clear();
 }
 
-export default deviceConfig;
+// Test function to verify device matching (for debugging)
+export function testDeviceMatching() {
+  console.log('=== Testing Device SKU Matching ===');
+  
+  // Test Y02
+  const y02Result = getDeviceBySku('OVERHEAD_Y02_SKU_CHN_PLUS');
+  console.log('Y02 SKU:', 'OVERHEAD_Y02_SKU_CHN_PLUS');
+  console.log('Matched Device:', y02Result?.name);
+  console.log('Expected: 词典笔X7P');
+  console.log('✓ Pass:', y02Result?.name === '词典笔X7P');
+  console.log('');
+  
+  // Test Y02-1
+  const y02_1Result = getDeviceBySku('OVERHEAD_Y02-1_SKU_CHN_PLUS');
+  console.log('Y02-1 SKU:', 'OVERHEAD_Y02-1_SKU_CHN_PLUS');
+  console.log('Matched Device:', y02_1Result?.name);
+  console.log('Expected: 词典笔X7P长续航版');
+  console.log('✓ Pass:', y02_1Result?.name === '词典笔X7P长续航版');
+  console.log('');
+  
+  // Clear cache for fresh tests
+  clearSkuCache();
+  
+  return {
+    y02: y02Result?.name,
+    y02_1: y02_1Result?.name
+  };
+}

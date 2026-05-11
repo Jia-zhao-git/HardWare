@@ -101,13 +101,13 @@ export default function AppPage({ selectedDevice, showNotif }: Props) {
                   <td><span className="badge badge-green">{a.version}</span></td>
                   <td>
                     <button
-                      className="btn-delete"
+                      className="btn-delete-row"
                       onClick={() => uninstallApp(a.appid)}
                       disabled={uninstalling === a.appid}
                       title="卸载此应用"
                     >
-                      <Trash2 size={11} />
-                      <span>{uninstalling === a.appid ? '...' : '删除'}</span>
+                      <Trash2 size={12} />
+                      <span>{uninstalling === a.appid ? '卸载中...' : '卸载'}</span>
                     </button>
                   </td>
                 </tr>

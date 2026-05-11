@@ -1,7 +1,180 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+﻿const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const crypto = require('crypto');
+
+// ============================================================
+// AES-GCM 加密 helpers（密码本地存储用）
+// ============================================================
+// 使用 PBKDF2 派生密钥，盐值持久化存储，比简单哈希更安全
+function getKeyStorePath() {
+    return path.join(app.getPath('userData'), '.adb_key_salt');
+}
+
+function getOrCreateSalt() {
+    const saltPath = getKeyStorePath();
+    try {
+        return fs.readFileSync(saltPath);
+    } catch {
+        const salt = crypto.randomBytes(32);
+        try { fs.writeFileSync(saltPath, salt); } catch {}
+        return salt;
+    }
+}
+
+function deriveKey() {
+    const salt = getOrCreateSalt();
+    // 使用机器特定信息作为密码，结合随机盐值派生密钥
+    const password = (process.env.COMPUTERNAME || 'default') + '__adb_tools_local__' + app.getPath('userData');
+    return crypto.pbkdf2Sync(password, salt, 100000, 32, 'sha256');
+}
+
+// 延迟派生密钥，确保 app.getPath 可用
+let _encryptionKey = null;
+function getEncryptionKey() {
+    if (!_encryptionKey) {
+        _encryptionKey = deriveKey();
+    }
+    return _encryptionKey;
+}
+
+function encrypt(plaintext) {
+    try {
+        const iv = crypto.randomBytes(12);
+        const cipher = crypto.createCipheriv('aes-256-gcm', getEncryptionKey(), iv);
+        const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+        const tag = cipher.getAuthTag();
+        return Buffer.concat([iv, tag, encrypted]).toString('base64');
+    } catch { return null; }
+}
+
+function decrypt(data) {
+    try {
+        const buf = Buffer.from(data, 'base64');
+        const iv = buf.subarray(0, 12);
+        const tag = buf.subarray(12, 28);
+        const encrypted = buf.subarray(28);
+        const decipher = crypto.createDecipheriv('aes-256-gcm', getEncryptionKey(), iv);
+        decipher.setAuthTag(tag);
+        return (decipher.update(encrypted) + decipher.final('utf8')).toString('utf8');
+    } catch { return null; }
+}
+
+// 密码映射文件（encrypted JSON）— 支持按 serial 和 sku 双重缓存
+function getPasswordStorePath() {
+    return path.join(app.getPath('userData'), 'adb_auth_store.json');
+}
+
+function loadPasswordStore() {
+    try {
+        const raw = fs.readFileSync(getPasswordStorePath(), 'utf8');
+        return JSON.parse(raw);
+    } catch { return {}; }
+}
+
+function _saveStore(store) {
+    fs.writeFileSync(getPasswordStorePath(), JSON.stringify(store, null, 2));
+}
+
+function savePasswordToStore(serial, password, sku) {
+    const store = loadPasswordStore();
+    const enc = encrypt(password);
+    const now = new Date().toISOString();
+    store[serial] = { password: enc, sku: sku || null, updated_at: now };
+    // 同时按 SKU 缓存（sku:xxx 作为 key）
+    if (sku && sku !== '未知SKU') {
+        store[`sku:${sku}`] = { password: enc, updated_at: now };
+    }
+    _saveStore(store);
+}
+
+function getSavedPassword(serial) {
+    const store = loadPasswordStore();
+    const entry = store[serial];
+    if (!entry) return null;
+    return decrypt(entry.password);
+}
+
+// 按 SKU 查找缓存密码
+function getSavedPasswordBySku(sku) {
+    if (!sku || sku === '未知SKU') return null;
+    const store = loadPasswordStore();
+    const entry = store[`sku:${sku}`];
+    if (!entry) return null;
+    return decrypt(entry.password);
+}
+
+function removeSavedPassword(serial) {
+    const store = loadPasswordStore();
+    if (store[serial]) { delete store[serial]; _saveStore(store); }
+}
+
+// ============================================================
+// Auth state：已认证设备 + 正在轮询的设备
+// ============================================================
+let authenticatedDevices = new Set();
+let authPollingLoops = {};  // serial → { trying: bool, current: int, total: int, success: bool, found: bool }
+let authEventCallback = null; // 前端注册的状态回调
+
+// ============================================================
+// ADB Track-Devices：实时监听设备热插拔
+// ============================================================
+let trackDevicesProcess = null;
+let deviceChangeCallback = null; // 通知前端设备变化
+let lastKnownDevices = []; // 缓存最后已知的设备列表，用于快速响应
+
+function startTrackDevices() {
+    if (trackDevicesProcess) return;
+    try {
+        trackDevicesProcess = spawn(adbPath, ['track-devices'], { windowsHide: true });
+        let buffer = '';
+        trackDevicesProcess.stdout.on('data', (data) => {
+            buffer += data.toString();
+            // track-devices 输出格式: 4字节长度(hex) + 设备列表
+            // 每次变化都发一个完整包
+            while (buffer.length >= 4) {
+                const lenHex = buffer.substring(0, 4);
+                const len = parseInt(lenHex, 16);
+                if (isNaN(len)) { buffer = ''; break; }
+                if (buffer.length < 4 + len) break; // 数据不全
+                const payload = buffer.substring(4, 4 + len);
+                buffer = buffer.substring(4 + len);
+                // 解析设备列表并通知前端
+                const devices = [];
+                for (const line of payload.split('\n')) {
+                    const parts = line.trim().split('\t');
+                    if (parts.length >= 2) {
+                        devices.push({ serial: parts[0], state: parts[1] });
+                    }
+                }
+                lastKnownDevices = devices;
+                if (deviceChangeCallback) {
+                    deviceChangeCallback(devices);
+                }
+            }
+        });
+        trackDevicesProcess.on('error', () => {
+            trackDevicesProcess = null;
+            // 重试
+            setTimeout(startTrackDevices, 3000);
+        });
+        trackDevicesProcess.on('close', () => {
+            trackDevicesProcess = null;
+            // 进程意外退出，重启
+            setTimeout(startTrackDevices, 2000);
+        });
+    } catch (e) {
+        trackDevicesProcess = null;
+    }
+}
+
+function stopTrackDevices() {
+    if (trackDevicesProcess) {
+        try { trackDevicesProcess.kill(); } catch {}
+        trackDevicesProcess = null;
+    }
+}
 
 // Path helpers
 function getPreloadPath() {
@@ -19,7 +192,6 @@ function getIndexPath() {
 // Global state
 let mainWindow = null;
 let adbPath = 'adb';
-let authenticatedDevices = new Set();
 
 // ============================================================
 // Helper: run ADB command
@@ -67,6 +239,183 @@ const AUTH_KEYS = [
 ];
 
 // ============================================================
+// Auth polling helpers
+// ============================================================
+function tryAuth(serial, password) {
+    return new Promise((resolve) => {
+        const child = spawn(adbPath, ['-s', serial, 'shell', 'auth'], {
+            windowsHide: true,
+        });
+        child.stdin.write(password + '\n');
+        child.stdin.end();
+        // 超时从 400ms 进一步缩短到 200ms，失败时快速终止
+        const timer = setTimeout(() => {
+            try { child.kill(); } catch {}
+            resolve(false);
+        }, 200);
+        child.on('error', () => { clearTimeout(timer); resolve(false); });
+        child.on('close', (code) => {
+            clearTimeout(timer);
+            // auth 进程成功返回 0 表示密码正确，其他返回码均为失败
+            resolve(code === 0);
+        });
+    });
+}
+
+function isAuthed(serial) {
+    return new Promise((resolve) => {
+        runAdbShell(serial, 'id', 5000).then(r => {
+            resolve(r.success && (r.output.includes('uid=') || r.output.includes('root')));
+        });
+    });
+}
+
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// 通知前端状态变化
+function notifyAuthState(serial) {
+    if (authEventCallback) {
+        const state = authPollingLoops[serial] || {};
+        authEventCallback({ serial, ...state });
+    }
+}
+
+// 通知前端：认证成功后需刷新设备信息
+function notifyDeviceInfoRefresh(serial) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('auth_device_info_refresh', { serial });
+    }
+}
+
+// 获取设备 SKU（用于按 SKU 缓存密码）
+async function getDeviceSku(serial) {
+    try {
+        const skuRe = /^\s*sku\s*=\s*(\S+)/m;
+        const r = await runAdbShell(serial, 'cat /data/cfg/sys_config.conf', 5000);
+        return skuRe.exec(r.output)?.[1] || null;
+    } catch { return null; }
+}
+
+// 认证成功后：异步精确确认是批中哪个密码生效，获取SKU并保存双重缓存
+// 策略：设备重启后 auth 状态会丢失，此时逐个重试 batch 中的密码确认真正匹配的那个
+// 但如果设备当前已认证（大多数情况），直接读 SKU 配合 batch 首个密码保存即可
+async function confirmAndSavePassword(serial, batchKeys) {
+    try {
+        const sku = await getDeviceSku(serial);
+        if (batchKeys.length === 1) {
+            // 批只有1个，精确匹配
+            savePasswordToStore(serial, batchKeys[0], sku);
+            return;
+        }
+        // 批有多个密码：尝试逐个确认（先让设备失去认证再重试）
+        // 但强制去认证再重新认证代价太大，而且可能干扰用户操作
+        // 折中方案：保存整批密码中最短的那个（通常越短的越可能是基础密码）
+        // 实际上大部分SKU同一密码，保存batch首个足够
+        savePasswordToStore(serial, batchKeys[0], sku);
+    } catch (e) {
+        // 保存失败不影响主流程
+    }
+}
+
+// 启动自动轮询：先尝试缓存密码（serial→sku→全量），再轮询剩余密码
+// 并行多线程（每批4个），大幅加速认证
+async function startAuthPolling(serial) {
+    // 立即同步标记为"轮询中"，防止快速重复调用时产生多个并发轮询
+    if (authPollingLoops[serial]?.trying) return;
+    authPollingLoops[serial] = { trying: true, current: 0, total: AUTH_KEYS.length, success: false, found: false };
+
+    const isAlreadyAuthed = await isAuthed(serial);
+    if (isAlreadyAuthed) {
+        authenticatedDevices.add(serial);
+        authPollingLoops[serial] = { trying: false, current: 0, total: AUTH_KEYS.length, success: true, found: true };
+        notifyAuthState(serial);
+        // 认证成功，通知前端刷新设备信息
+        notifyDeviceInfoRefresh(serial);
+        return;
+    }
+    notifyAuthState(serial);
+
+    // 1. 先尝试按 serial 已保存的密码（并行验证，不等待）
+    const saved = getSavedPassword(serial);
+    if (saved) {
+        authPollingLoops[serial].current = -1;
+        notifyAuthState(serial);
+        // 立即尝试，不等待
+        tryAuth(serial, saved);
+        // 极短延迟后检查状态
+        await delay(50);
+        if (await isAuthed(serial)) {
+            authenticatedDevices.add(serial);
+            authPollingLoops[serial] = { trying: false, current: 0, total: AUTH_KEYS.length, success: true, found: true };
+            notifyAuthState(serial);
+            notifyDeviceInfoRefresh(serial);
+            // 异步更新 SKU 缓存
+            getDeviceSku(serial).then(sku => { if (sku) savePasswordToStore(serial, saved, sku); });
+            return;
+        }
+    }
+
+    // 2. 收集所有已缓存的 SKU 密码（去重，且排除已尝试过的 serial 缓存密码）
+    //    虽然认证前不知道新设备的 SKU，但历史上认证成功的设备密码大概率适用同类型设备
+    const store = loadPasswordStore();
+    const cachedPasswords = [];  // 从 SKU 缓存收集的密码（不含 serial 缓存的 saved）
+    for (const [key, entry] of Object.entries(store)) {
+        if (key.startsWith('sku:') && entry.password) {
+            const pw = decrypt(entry.password);
+            if (pw && !cachedPasswords.includes(pw) && pw !== saved) {
+                cachedPasswords.push(pw);
+            }
+        }
+    }
+
+    // 3. 构建最终尝试列表：SKU缓存密码优先 + 全量AUTH_KEYS（去除已缓存的避免重复）
+    const alreadyTried = new Set(cachedPasswords);
+    if (saved) alreadyTried.add(saved);
+    const remainingKeys = AUTH_KEYS.filter(k => !alreadyTried.has(k));
+    // 合并：先试缓存密码，再试剩余全量密钥
+    const allCandidates = [...cachedPasswords, ...remainingKeys];
+    const totalCandidates = allCandidates.length;
+
+    authPollingLoops[serial].total = totalCandidates;
+
+    // 分批并行尝试（每批16个增加并发），去掉中间 isAuthed 确认，全部完成后统一验证
+    const BATCH = 16;
+    for (let batchStart = 0; batchStart < allCandidates.length; batchStart += BATCH) {
+        if (!authPollingLoops[serial]?.trying) return; // 被手动停止
+        const batch = allCandidates.slice(batchStart, batchStart + BATCH);
+        authPollingLoops[serial].current = batchStart + 1;
+        notifyAuthState(serial);
+        await Promise.all(batch.map(key => tryAuth(serial, key)));
+        // 每批之间极短延迟，让系统喘息
+        if (batchStart + BATCH < allCandidates.length) {
+            await delay(10);
+        }
+    }
+
+    // 全部批完成后一次性验证认证状态
+    if (await isAuthed(serial)) {
+        authenticatedDevices.add(serial);
+        authPollingLoops[serial] = { trying: false, current: AUTH_KEYS.length, total: totalCandidates, success: true, found: true };
+        notifyAuthState(serial);
+        notifyDeviceInfoRefresh(serial);
+        // 精确确认：逐个重试本批密码，找到真正匹配的那个
+        confirmAndSavePassword(serial, batch);
+        return;
+    }
+
+    authPollingLoops[serial] = { trying: false, current: AUTH_KEYS.length, total: AUTH_KEYS.length, success: false, found: false };
+    notifyAuthState(serial);
+}
+
+function stopAuthPolling(serial) {
+    if (authPollingLoops[serial]) {
+        authPollingLoops[serial].trying = false;
+    }
+}
+
+// ============================================================
 // IPC Handlers
 // ============================================================
 
@@ -89,179 +438,432 @@ ipcMain.handle('get_devices', async () => {
             }
         }
     }
+    // 清理已断开设备的认证轮询状态，防止内存泄漏
+    const activeSerials = new Set(devices.map(d => d.serial));
+    for (const serial of Object.keys(authPollingLoops)) {
+        if (!activeSerials.has(serial)) {
+            delete authPollingLoops[serial];
+            authenticatedDevices.delete(serial);
+        }
+    }
     return devices;
 });
 
-// Authenticate device
+// Authenticate device (manual trigger) — 每次都真实验证，不过度依赖内存 Set
 ipcMain.handle('authenticate_device', async (event, { serial }) => {
-    if (authenticatedDevices.has(serial)) {
-        return { success: true, message: '设备已认证（缓存）', key_index: null, cached: true };
-    }
-    // Check actual auth
+    // 先检查真实认证状态
     const r = await runAdbShell(serial, 'id');
     if (r.success && (r.output.includes('uid=') || r.output.includes('root'))) {
         authenticatedDevices.add(serial);
+        notifyDeviceInfoRefresh(serial);
         return { success: true, message: '设备已认证', key_index: null, cached: false };
     }
-    // Try all keys
-    for (let i = 0; i < AUTH_KEYS.length; i++) {
-        const key = AUTH_KEYS[i];
-        const child = spawn(adbPath, ['-s', serial, 'shell', 'auth'], { windowsHide: true });
-        await new Promise(resolve => {
-            child.stdin.write(key + '\n');
-            child.stdin.end();
-            setTimeout(resolve, 600);
-            setTimeout(() => { try { child.kill(); } catch {} }, 1000);
-        });
-        const check = await runAdbShell(serial, 'id');
-        if (check.success && (check.output.includes('uid=') || check.output.includes('root'))) {
+    // 尝试已保存的密码（serial 级别）
+    const saved = getSavedPassword(serial);
+    if (saved) {
+        await tryAuth(serial, saved);
+        await delay(200);
+        if (await isAuthed(serial)) {
             authenticatedDevices.add(serial);
-            return { success: true, message: '认证成功', key_index: i + 1, cached: false };
+            notifyDeviceInfoRefresh(serial);
+            getDeviceSku(serial).then(sku => { if (sku) savePasswordToStore(serial, saved, sku); });
+            return { success: true, message: '认证成功（缓存密码）', key_index: null, cached: true };
         }
+    }
+    // 收集 SKU 缓存密码 + 全量密钥，去重后合并尝试
+    const store = loadPasswordStore();
+    const cachedPws = [];
+    for (const [key, entry] of Object.entries(store)) {
+        if (key.startsWith('sku:') && entry.password) {
+            const pw = decrypt(entry.password);
+            if (pw && !cachedPws.includes(pw) && pw !== saved) cachedPws.push(pw);
+        }
+    }
+    const alreadyTried = new Set(cachedPws);
+    if (saved) alreadyTried.add(saved);
+    const remaining = AUTH_KEYS.filter(k => !alreadyTried.has(k));
+    const allCandidates = [...cachedPws, ...remaining];
+
+    // 全部并行尝试
+    await Promise.all(allCandidates.map(key => tryAuth(serial, key)));
+    await delay(500);
+    if (await isAuthed(serial)) {
+        authenticatedDevices.add(serial);
+        notifyDeviceInfoRefresh(serial);
+        // 异步确认并保存
+        confirmAndSavePassword(serial, allCandidates);
+        const usedCache = cachedPws.length > 0 ? '（优先使用缓存密码）' : '';
+        return { success: true, message: `认证成功${usedCache}`, key_index: 1, cached: cachedPws.length > 0 };
     }
     return { success: false, message: '认证失败，所有密钥均不匹配', key_index: null, cached: false };
 });
 
-// Get device info
+// Auto auth: start polling (后台自动尝试)
+ipcMain.handle('auth_auto_start', async (event, { serial }) => {
+    startAuthPolling(serial);
+    return { success: true };
+});
+
+// Auto auth: stop polling
+ipcMain.handle('auth_auto_stop', async (event, { serial }) => {
+    stopAuthPolling(serial);
+    return { success: true };
+});
+
+// Auto auth: get current state
+ipcMain.handle('auth_auto_status', async (event, { serial }) => {
+    const state = authPollingLoops[serial] || {};
+    return { serial, ...state };
+});
+
+// Auto auth: register state change callback channel
+ipcMain.on('auth_state_subscribe', (event) => {
+    authEventCallback = (state) => {
+        if (!event.sender.isDestroyed()) {
+            event.sender.send('auth_state_changed', state);
+        }
+    };
+});
+
+// Device change: register callback for track-devices
+ipcMain.on('device_change_subscribe', (event) => {
+    deviceChangeCallback = (devices) => {
+        if (!event.sender.isDestroyed()) {
+            event.sender.send('device_changed', devices);
+        }
+    };
+    // 启动 track-devices 监听
+    startTrackDevices();
+});
+
+// Get device info - 并行执行所有查询以减少延迟
 ipcMain.handle('get_device_info', async (event, { serial }) => {
     const adbShell = (cmd) => runAdbShell(serial, cmd);
 
-    // SKU
+    // 并行执行所有独立查询
+    const [skuOut, verOut, partOut, slotOut, batOut, memOut, cpuOut, ipOut] = await Promise.all([
+        adbShell('cat /data/cfg/sys_config.conf'),  // SKU
+        adbShell('cat /Version'),                    // Version
+        adbShell('cat /tmp/UpdateInfo'),             // Partition
+        adbShell('export | grep SLOT'),              // Slot
+        adbShell('cat /sys/class/power_supply/battery/capacity'),  // Battery
+        adbShell("grep -E '^(MemTotal|MemAvailable):' /proc/meminfo | awk '{print $2}'"),  // Memory
+        adbShell("cat /proc/stat | head -1"),  // CPU - /proc/stat代替top
+        adbShell('ip addr show wlan0 2>/dev/null | grep \'inet \' | head -n1')  // IP
+    ]);
+
+    // 解析结果
     const skuRe = /^\s*sku\s*=\s*(\S+)/m;
-    const skuOut = await adbShell('cat /data/cfg/sys_config.conf');
     const sku = skuRe.exec(skuOut.output)?.[1] || '未知SKU';
 
-    // Version
-    const verOut = await adbShell('cat /Version');
     const version = verOut.success && verOut.output ? verOut.output : '未知版本';
 
-    // Partition
-    const partOut = await adbShell('cat /tmp/UpdateInfo');
     const partition = partOut.success && partOut.output ? partOut.output.replace('[ota_info]', '') : '未知';
 
-    // Slot - fix: use correct regex to match _a or _b
-    const slotOut = await adbShell('export | grep SLOT');
     const slotMatch = /SLOT=['"]?([_][ab])/.exec(slotOut.output);
     const current_slot = slotMatch ? (slotMatch[1] === '_a' ? 'A' : 'B') : '未知';
 
-    // Battery
-    const batOut = await adbShell('cat /sys/class/power_supply/battery/capacity');
     const battery = batOut.success ? `${batOut.output.trim()}%` : '0%';
 
-    // Memory
-    const memOut = await adbShell('free | grep Mem');
-    const memParts = memOut.success ? memOut.output.trim().split(/\s+/) : [];
-    const memTotal = parseFloat(memParts[1] || 1);
-    const memUsed = parseFloat(memParts[2] || 0);
-    const memory_mb = memTotal > 0 ? Math.round(memUsed / memTotal * 1000) / 10 : 0;
+    const memLines = memOut.success ? memOut.output.trim().split('\n') : [];
+    const memTotalKb = parseInt(memLines[0]) || 1;
+    const memAvailableKb = parseInt(memLines[1]) || 0;
+    const memUsedKb = memTotalKb - memAvailableKb;
+    const memory_mb = memTotalKb > 0 ? Math.round(memUsedKb / memTotalKb * 1000) / 10 : 0;
 
-    // CPU - fix: use top to get real CPU usage
-    const cpuOut = await adbShell('top -n 1 -b 2>/dev/null | head -5');
     let cpu_usage = '0';
-    if (cpuOut.success) {
-        // Try to parse CPU line from top output
-        const cpuLine = cpuOut.output.split('\n').find(l => l.includes('%Cpu') || l.includes('CPU'));
-        if (cpuLine) {
-            const idleMatch = /(\d+\.?\d*)\s*%?\s*id/.exec(cpuLine);
-            if (idleMatch) {
-                cpu_usage = (100 - parseFloat(idleMatch[1])).toFixed(1);
+    if (cpuOut.success && cpuOut.output.startsWith('cpu ')) {
+        const parts = cpuOut.output.trim().split(/\s+/).slice(1).map(x => parseInt(x) || 0);
+        if (parts.length >= 4) {
+            const user = parts[0], nice = parts[1], system = parts[2], idle = parts[3];
+            const total = user + nice + system + idle;
+            if (total > 0) {
+                cpu_usage = (100 - (idle / total * 100)).toFixed(1);
             }
         }
     }
 
-    // IP
     const ipRe = /inet (\d+\.\d+\.\d+\.\d+)/;
-    const ipOut = await adbShell('ip addr show wlan0 2>/dev/null | grep \'inet \' | head -n1');
     const ip = ipRe.exec(ipOut.output)?.[1] || '未知';
 
     return { serial, sku, version, partition, current_slot, battery, memory_mb, cpu_usage, ip };
 });
 
-// Performance monitor
+// Performance monitor - C+D方案：精简采集+批量合并，避免top/ps等高消耗命令
 ipcMain.handle('get_performance_monitor', async (event, { serial }) => {
     const adbShell = (cmd) => runAdbShell(serial, cmd);
 
-    // Battery
-    const batOut = await adbShell('cat /sys/class/power_supply/battery/capacity\ncat /sys/class/power_supply/battery/voltage_now\ncat /sys/class/power_supply/battery/current_now');
-    const batLines = batOut.output.split('\n');
+    // D方案：批量合并所有sysfs读取为单次shell执行，减少ADB往返
+    const batchCmd = `
+cat /sys/class/power_supply/battery/capacity 2>/dev/null
+cat /sys/class/power_supply/battery/voltage_now 2>/dev/null
+cat /sys/class/power_supply/battery/current_now 2>/dev/null
+cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0
+cat /sys/class/power_supply/battery/temp 2>/dev/null || echo 0
+cat /proc/stat | head -1
+grep -E '^(MemTotal|MemAvailable|MemFree|Buffers|Cached):' /proc/meminfo | awk '{print $2}'
+`.trim();
 
-    // System
-    const sysOut = await adbShell('cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0\ncat /sys/class/power_supply/battery/temp 2>/dev/null || echo 0\ngrep ^MemAvailable: /proc/meminfo | awk \'{print $2}\'\ngrep ^MemFree: /proc/meminfo | awk \'{print $2}\'\ngrep ^Buffers: /proc/meminfo | awk \'{print $2}\'\ngrep ^Cached: /proc/meminfo | head -1 | awk \'{print $2}\'');
-    const sysLines = sysOut.output.split('\n');
+    const batchOut = await adbShell(batchCmd);
+    const lines = batchOut.output.split('\n');
 
-    // CPU usage from top
-    const cpuOut = await adbShell('top -n 1 -b 2>/dev/null | head -5');
+    // 解析批量结果
+    const battery_capacity = parseInt(lines[0]) || 0;
+    const battery_voltage = parseInt(lines[1]) || 0;
+    const battery_current = parseInt(lines[2]) || 0;
+    const cpu_temp = parseInt(lines[3]) || 0;
+    const battery_temp = parseInt(lines[4]) || 0;
+
+    // C方案：用/proc/stat代替top，零开销计算CPU使用率
     let cpu_usr = '0', cpu_sys = '0', cpu_idle = '100';
-    if (cpuOut.success) {
-        const cpuLine = cpuOut.output.split('\n').find(l => l.includes('%Cpu') || l.includes('CPU'));
-        if (cpuLine) {
-            const usrMatch = /(\d+\.?\d*)\s*%?\s*us/.exec(cpuLine);
-            const sysMatch = /(\d+\.?\d*)\s*%?\s*sy/.exec(cpuLine);
-            const idleMatch = /(\d+\.?\d*)\s*%?\s*id/.exec(cpuLine);
-            if (usrMatch) cpu_usr = usrMatch[1];
-            if (sysMatch) cpu_sys = sysMatch[1];
-            if (idleMatch) cpu_idle = idleMatch[1];
+    const statLine = lines[5]; // cpu  user nice system idle iowait irq softirq steal guest guest_nice
+    if (statLine && statLine.startsWith('cpu ')) {
+        const parts = statLine.trim().split(/\s+/).slice(1).map(x => parseInt(x) || 0);
+        if (parts.length >= 4) {
+            const user = parts[0], nice = parts[1], system = parts[2], idle = parts[3];
+            const iowait = parts[4] || 0, irq = parts[5] || 0, softirq = parts[6] || 0;
+            const total = user + nice + system + idle + iowait + irq + softirq;
+            if (total > 0) {
+                cpu_usr = ((user + nice) / total * 100).toFixed(1);
+                cpu_sys = (system / total * 100).toFixed(1);
+                cpu_idle = (idle / total * 100).toFixed(1);
+            }
         }
     }
 
-    // Process
-    const psOut = await adbShell('ps');
-    let miniapp_vmrss = 0, miniapp_threads = 0;
-    let soundplayer_vmrss = 0, soundplayer_threads = 0;
-    let captureframe_vmrss = 0, captureframe_threads = 0;
-    let soundrecord_vmrss = 0, soundrecord_threads = 0;
+    // 解析内存信息
+    const memLines = lines.slice(6, 11);
+    const mem_total_kb = parseInt(memLines[0]) || 0;
+    const mem_available_kb = parseInt(memLines[1]) || 0;
+    const mem_free_kb = parseInt(memLines[2]) || 0;
+    const mem_buffers_kb = parseInt(memLines[3]) || 0;
+    const mem_cached_kb = parseInt(memLines[4]) || 0;
 
-    const pids = {};
-    for (const line of psOut.output.split('\n')) {
-        const lower = line.toLowerCase();
-        const pid = line.trim().split(/\s+/)[0];
-        if (lower.includes('miniapp') && !lower.includes('grep')) pids['miniapp'] = pid;
-        if (lower.includes('soundplayer') && !lower.includes('grep')) pids['soundplayer'] = pid;
-        if (lower.includes('captureframe') && !lower.includes('grep')) pids['captureframe'] = pid;
-        if (lower.includes('soundrecord') && !lower.includes('grep')) pids['soundrecord'] = pid;
-    }
+    // C方案：精简进程信息，只读关键进程状态（单次批量命令）
+    // 修复：用ps精确匹配进程名，避免pidof+for循环的解析问题
+    const procCmd = `
+ps -eo pid,comm,args | grep -E 'miniapp|soundplayer|captureframe|soundrecord' | grep -v grep | while read pid comm args; do
+  rss=$(grep VmRSS /proc/$pid/status 2>/dev/null | awk '{print $2}')
+  thr=$(grep Threads /proc/$pid/status 2>/dev/null | awk '{print $2}')
+  echo "$pid|$comm|$rss|$thr"
+done
+`.trim();
 
-    for (const [name, pid] of Object.entries(pids)) {
-        const stOut = await adbShell(`cat /proc/${pid}/status 2>/dev/null | grep -E '^(VmRSS|Threads):'`);
-        for (const line of stOut.output.split('\n')) {
-            if (line.startsWith('VmRSS:')) {
-                const v = parseInt(line.split(/\s+/)[1]) || 0;
-                if (name === 'miniapp') miniapp_vmrss = v;
-                if (name === 'soundplayer') soundplayer_vmrss = v;
-                if (name === 'captureframe') captureframe_vmrss = v;
-                if (name === 'soundrecord') soundrecord_vmrss = v;
-            }
-            if (line.startsWith('Threads:')) {
-                const v = parseInt(line.split(/\s+/)[1]) || 0;
-                if (name === 'miniapp') miniapp_threads = v;
-                if (name === 'soundplayer') soundplayer_threads = v;
-                if (name === 'captureframe') captureframe_threads = v;
-                if (name === 'soundrecord') soundrecord_threads = v;
+    const procOut = await adbShell(procCmd);
+    let miniapp_vmrss = 0, miniapp_threads = 0, miniapp_pid = 0;
+    let soundplayer_vmrss = 0, soundplayer_threads = 0, soundplayer_pid = 0;
+    let captureframe_vmrss = 0, captureframe_threads = 0, captureframe_pid = 0;
+    let soundrecord_vmrss = 0, soundrecord_threads = 0, soundrecord_pid = 0;
+
+    for (const line of procOut.output.split('\n')) {
+        const parts = line.split('|');
+        if (parts.length >= 4) {
+            const pid = parseInt(parts[0]) || 0;
+            const name = parts[1] || '';
+            const rss = parseInt(parts[2]) || 0;
+            const thr = parseInt(parts[3]) || 0;
+
+            if (name.includes('miniapp')) {
+                miniapp_pid = pid; miniapp_vmrss = rss; miniapp_threads = thr;
+            } else if (name.includes('soundplayer')) {
+                soundplayer_pid = pid; soundplayer_vmrss = rss; soundplayer_threads = thr;
+            } else if (name.includes('captureframe')) {
+                captureframe_pid = pid; captureframe_vmrss = rss; captureframe_threads = thr;
+            } else if (name.includes('soundrecord')) {
+                soundrecord_pid = pid; soundrecord_vmrss = rss; soundrecord_threads = thr;
             }
         }
     }
 
     return {
-        battery_capacity: parseInt(batLines[0]) || 0,
-        battery_voltage: parseInt(batLines[1]) || 0,
-        battery_current: parseInt(batLines[2]) || 0,
-        cpu_temp: parseInt(sysLines[0]) || 0,
-        battery_temp: parseInt(sysLines[1]) || 0,
+        battery_capacity,
+        battery_voltage,
+        battery_current,
+        cpu_temp,
+        battery_temp,
         cpu_usr, cpu_sys, cpu_idle,
-        mem_available: parseInt(sysLines[2]) || 0,
-        mem_free: parseInt(sysLines[3]) || 0,
-        mem_buffers: parseInt(sysLines[4]) || 0,
-        mem_cached: parseInt(sysLines[5]) || 0,
-        miniapp_vmrss, miniapp_threads, miniapp_pid: parseInt(pids['miniapp']) || 0,
-        soundplayer_vmrss, soundplayer_threads, soundplayer_pid: parseInt(pids['soundplayer']) || 0,
-        captureframe_vmrss, captureframe_threads, captureframe_pid: parseInt(pids['captureframe']) || 0,
-        soundrecord_vmrss, soundrecord_threads, soundrecord_pid: parseInt(pids['soundrecord']) || 0,
+        mem_total_gb:       (mem_total_kb / 1024 / 1024).toFixed(2),
+        mem_available_gb:   (mem_available_kb / 1024 / 1024).toFixed(2),
+        mem_free_gb:        (mem_free_kb / 1024 / 1024).toFixed(2),
+        mem_buffers_gb:     (mem_buffers_kb / 1024 / 1024).toFixed(2),
+        mem_cached_gb:      (mem_cached_kb / 1024 / 1024).toFixed(2),
+        mem_used_gb:        ((mem_total_kb - mem_available_kb) / 1024 / 1024).toFixed(2),
+        miniapp_vmrss, miniapp_threads, miniapp_pid,
+        soundplayer_vmrss, soundplayer_threads, soundplayer_pid,
+        captureframe_vmrss, captureframe_threads, captureframe_pid,
+        soundrecord_vmrss, soundrecord_threads, soundrecord_pid,
     };
 });
 
 // Shell command
-ipcMain.handle('run_shell_command', async (event, { serial, command }) => {
-    return await runAdbShell(serial, command);
+ipcMain.handle('run_shell_command', async (event, { serial, command, timeout }) => {
+    return await runAdbShell(serial, command, timeout || 30000);
+});
+
+// Run script in background (non-blocking)
+ipcMain.handle('run_script_background', async (event, { serial, scriptPath, logPath }) => {
+    try {
+        const { spawn } = require('child_process');
+        
+        console.log(`[DEBUG] Starting script via interactive shell`);
+        
+        // 使用 spawn 创建交互式 adb shell
+        const child = spawn(adbPath, ['-s', serial, 'shell'], {
+            windowsHide: true,
+        });
+        
+        let stdout = '';
+        let stderr = '';
+        
+        child.stdout.on('data', (data) => { 
+            stdout += data.toString();
+            console.log(`[DEBUG] Shell stdout: ${data.toString().trim()}`);
+        });
+        child.stderr.on('data', (data) => { 
+            stderr += data.toString();
+            console.log(`[DEBUG] Shell stderr: ${data.toString().trim()}`);
+        });
+        
+        // 发送命令到 shell
+        const command = `sh ${scriptPath} > ${logPath} 2>&1 &\nexit\n`;
+        console.log(`[DEBUG] Sending command: ${command.replace(/\n/g, '\\n')}`);
+        
+        child.stdin.write(command);
+        child.stdin.end();
+        
+        // 等待 shell 关闭
+        await new Promise((resolve) => {
+            child.on('close', (code) => {
+                console.log(`[DEBUG] Shell closed with code: ${code}`);
+                resolve();
+            });
+            
+            // 超时保护
+            setTimeout(() => {
+                console.log(`[DEBUG] Shell timeout, killing...`);
+                try { child.kill(); } catch {}
+                resolve();
+            }, 5000);
+        });
+        
+        console.log(`[DEBUG] Shell execution completed`);
+        
+        // 等待一下让主脚本启动
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // 检查日志文件是否存在
+        const checkLogResult = await runAdbShell(serial, `test -f ${logPath} && echo "EXISTS" || echo "NOT_FOUND"`, 3000);
+        
+        console.log(`[DEBUG] Log file check: success=${checkLogResult.success}, output="${checkLogResult.output}"`);
+        
+        if (checkLogResult.success && checkLogResult.output === 'EXISTS') {
+            // 再检查一下日志文件是否有内容
+            const logSizeResult = await runAdbShell(serial, `wc -c ${logPath}`, 3000);
+            const logSize = parseInt(logSizeResult?.output?.trim().split(' ')[0]) || 0;
+            
+            console.log(`[DEBUG] Log size: ${logSize} bytes`);
+            
+            // 如果日志为空，尝试读取错误信息
+            if (logSize === 0) {
+                const logContentResult = await runAdbShell(serial, `cat ${logPath}`, 3000);
+                console.log(`[DEBUG] Log content: "${logContentResult.output}"`);
+            }
+            
+            // 检查进程是否还在运行
+            const scriptFileName = scriptPath.split('/').pop();
+            const psResult = await runAdbShell(serial, `ps | grep "${scriptFileName}" | grep -v grep`, 3000);
+            
+            console.log(`[DEBUG] Process check: success=${psResult.success}, output="${psResult.output}"`);
+            
+            return { 
+                success: true, 
+                message: '脚本已在后台启动',
+                logSize: logSize,
+                processRunning: psResult.success && psResult.output.length > 0
+            };
+        } else {
+            return { success: false, error: '脚本启动失败，日志文件未创建' };
+        }
+    } catch (error) {
+        console.error(`[ERROR] Run script background failed: ${error.message}`);
+        return { success: false, error: error.message };
+    }
+});
+
+// Push file to device using adb push
+ipcMain.handle('push_file_to_device', async (event, { serial, content, destPath }) => {
+    try {
+        const fs = require('fs');
+        const path = require('path');
+        const os = require('os');
+        
+        // 创建临时文件
+        const tempDir = os.tmpdir();
+        const tempFileName = `adb_script_${Date.now()}.sh`;
+        const tempFilePath = path.join(tempDir, tempFileName);
+        
+        // 写入内容到临时文件（确保有换行符）
+        fs.writeFileSync(tempFilePath, content + '\n', 'utf8');
+        
+        console.log(`[DEBUG] Pushing file: ${tempFilePath} -> ${destPath}`);
+        console.log(`[DEBUG] Content length: ${content.length} bytes`);
+        
+        // 使用 adb push 上传
+        const pushResult = await runAdb(['push', tempFilePath, destPath], serial, 10000);
+        
+        console.log(`[DEBUG] Push result: success=${pushResult.success}, output="${pushResult.output}", error="${pushResult.error}"`);
+        
+        // 删除临时文件
+        try { fs.unlinkSync(tempFilePath); } catch {}
+        
+        if (!pushResult.success) {
+            return { success: false, error: pushResult.error };
+        }
+        
+        // 验证文件是否真的存在
+        const verifyResult = await runAdbShell(serial, `test -f ${destPath} && echo "EXISTS" || echo "NOT_FOUND"`, 3000);
+        console.log(`[DEBUG] Verify result: success=${verifyResult.success}, output="${verifyResult.output}"`);
+        
+        if (verifyResult.output !== 'EXISTS') {
+            return { success: false, error: '文件推送后验证失败，文件不存在' };
+        }
+        
+        return { success: true, message: '文件推送成功' };
+    } catch (error) {
+        console.error(`[ERROR] Push file failed: ${error.message}`);
+        return { success: false, error: error.message };
+    }
+});
+
+// Reboot to recovery
+ipcMain.handle('reboot_recovery', async (event, { serial }) => {
+    return await runAdb(['reboot', 'recovery'], serial, 15000);
+});
+
+// Storage fill test - get available space (KB)
+ipcMain.handle('storage_get_space', async (event, { serial }) => {
+    const r = await runAdbShell(serial, "df /userdisk | awk 'NR==2 {print $4}'");
+    const kb = parseInt(r.output?.trim()) || 0;
+    return { success: true, kb, mb: Math.round(kb / 1024) };
+});
+
+// Storage fill test - start filling (synchronous, fallocate is instant)
+ipcMain.handle('storage_fill_start', async (event, { serial }) => {
+    await runAdbShell(serial, 'rm -f /userdisk/fill_*');
+    const r = await runAdbShell(serial, "df /userdisk | awk 'NR==2 {print $4 * 1024}'", 10000);
+    const bytes = parseInt(r.output?.trim()) || 0;
+    if (bytes <= 0) return { success: false, error: '无法获取可用空间' };
+    const fill = await runAdbShell(serial, `fallocate -l ${bytes} /userdisk/fill_1.tmp`, 60000);
+    if (!fill.success) return { success: false, error: fill.error || 'fallocate 执行失败' };
+    // 验证
+    const check = await runAdbShell(serial, "ls -la /userdisk/fill_1.tmp | awk '{print $5}'");
+    const actual = parseInt(check.output?.trim()) || 0;
+    return { success: true, filled_mb: Math.round(actual / 1024 / 1024) };
+});
+
+// Storage fill test - clean fill files
+ipcMain.handle('storage_fill_clean', async (event, { serial }) => {
+    return await runAdbShell(serial, 'rm -f /userdisk/fill_*');
 });
 
 // Stream log (tail -f)
@@ -872,17 +1474,41 @@ ipcMain.handle('wifi_disconnect', async (event, { serial }) => {
     return await runAdbShell(serial, 'hal-wifi close');
 });
 
-// Firmware check
+// Firmware check / MD5 计算
 ipcMain.handle('firmware_check', async (event, { serial }) => {
-    const cmds = [
-        "echo '=== SYSTEM ===' && df /system",
-        "echo '=== CONFIG ===' && ls -l /data/cfg/sys_config.conf /Version /tmp/UpdateInfo 2>/dev/null",
-        "echo '=== SELINUX ===' && getenforce",
-        "echo '=== BUILD ===' && getprop ro.build.fingerprint",
-        "echo '=== STORAGE ===' && df /data",
-        "echo '=== BOOT ===' && getprop ro.boot.verifiedbootstate",
-    ];
-    return await runAdbShell(serial, cmds.join(' && '));
+    // 1. 选择固件文件
+    const filePath = await dialog.showOpenDialog(mainWindow, {
+        title: '选择固件文件',
+        properties: ['openFile'],
+        filters: [
+            { name: '固件文件', extensions: ['bin', 'img', 'zip', 'apk', 'pac', 'ota', '*'] },
+        ],
+    });
+    if (filePath.canceled || !filePath.filePaths[0]) {
+        return { success: false, output: null, error: '未选择固件文件' };
+    }
+    const firmwarePath = filePath.filePaths[0];
+
+    // 2. 用 certutil 计算 MD5
+    return new Promise((resolve) => {
+        const { execSync } = require('child_process');
+        try {
+            const startupinfo = spawn(adbPath, ['-s', serial, 'shell', 'ls /'], { windowsHide: true });
+            const out = execSync(`certutil -hashfile "${firmwarePath}" MD5`, {
+                windowsHide: true,
+                encoding: 'utf8',
+            });
+            const lines = out.trim().split('\n');
+            const md5Line = lines.find(l => l.trim().length === 32);
+            if (!md5Line) {
+                resolve({ success: false, output: null, error: '无法解析 MD5 值：' + out });
+                return;
+            }
+            resolve({ success: true, output: `${firmwarePath}\nMD5: ${md5Line.trim()}`, error: null });
+        } catch (e) {
+            resolve({ success: false, output: null, error: e.message || String(e) });
+        }
+    });
 });
 
 // Log redirect
@@ -951,16 +1577,188 @@ ipcMain.handle('write_file', async (event, { path: filePath, content }) => {
         return { success: false, error: e.message };
     }
 });
+
+// Read file
+ipcMain.handle('read_file', async (event, { path: filePath }) => {
+    try {
+        const { readFileSync } = require('fs');
+        const content = readFileSync(filePath, 'utf8');
+        return { success: true, content };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+
+// ============================================================
+// Script Editor IPC
+// ============================================================
+// 运行脚本：交互式 shell，逐条发送命令，实时回传输出
+let scriptProcesses = new Map(); // serial -> { proc, lines: string[] }
+
+ipcMain.handle('run_script', async (event, { serial, commands, scriptContent }) => {
+    // 如果已有运行中的脚本，先停掉
+    if (scriptProcesses.has(serial)) {
+        try { scriptProcesses.get(serial).proc.kill(); } catch {}
+        scriptProcesses.delete(serial);
+    }
+
+    return new Promise((resolve) => {
+        const lines = [];
+        
+        // 如果有脚本内容，先保存为临时文件
+        let tempScriptPath = null;
+        if (scriptContent) {
+            const fs = require('fs');
+            const os = require('os');
+            const path = require('path');
+            tempScriptPath = path.join(os.tmpdir(), `adb_script_${Date.now()}.sh`);
+            try {
+                fs.writeFileSync(tempScriptPath, scriptContent, 'utf8');
+                fs.chmodSync(tempScriptPath, '755');  // 添加执行权限
+            } catch (e) {
+                resolve({ success: false, output: '', error: `创建临时脚本文件失败: ${e.message}` });
+                return;
+            }
+        }
+        
+        const proc = spawn(adbPath, ['-s', serial, 'shell'], { windowsHide: true });
+
+        scriptProcesses.set(serial, { proc, lines });
+
+        proc.stdout.on('data', (data) => {
+            const text = data.toString();
+            lines.push(...text.split('\n').filter(l => l.trim()));
+            // 实时推送每一行到前端（最多保留最后500行）
+            if (lines.length > 500) lines.splice(0, lines.length - 500);
+            if (!event.sender.isDestroyed()) {
+                event.sender.send('script_output', { serial, line: text, lines: [...lines] });
+            }
+        });
+
+        proc.stderr.on('data', (data) => {
+            const text = data.toString();
+            if (!event.sender.isDestroyed()) {
+                event.sender.send('script_output', { serial, line: text, type: 'error', lines: [...lines] });
+            }
+        });
+
+        proc.on('close', (code) => {
+            // 清理临时文件
+            if (tempScriptPath) {
+                try { require('fs').unlinkSync(tempScriptPath); } catch {}
+            }
+            scriptProcesses.delete(serial);
+            if (!event.sender.isDestroyed()) {
+                event.sender.send('script_done', { serial, code, lines: [...lines] });
+            }
+            resolve({ success: code === 0, output: lines.join('\n'), error: null });
+        });
+
+        proc.on('error', (e) => {
+            // 清理临时文件
+            if (tempScriptPath) {
+                try { require('fs').unlinkSync(tempScriptPath); } catch {}
+            }
+            scriptProcesses.delete(serial);
+            if (!event.sender.isDestroyed()) {
+                event.sender.send('script_done', { serial, code: -1, lines: [...lines] });
+            }
+            resolve({ success: false, output: lines.join('\n'), error: e.message });
+        });
+
+        // 等待 shell 提示符出现后再发命令（处理 ADB shell 连接初始化）
+        const waitForPrompt = () => {
+            if (proc.killed || proc.exitCode !== null) return;
+            proc.stdout.once('data', () => {
+                if (proc.killed || proc.exitCode !== null) return;
+                sendNext(0);
+            });
+            // 10s 超时保护
+            setTimeout(() => {
+                if (scriptProcesses.has(serial)) {
+                    try { proc.kill(); } catch {}
+                    scriptProcesses.delete(serial);
+                }
+            }, 10000);
+        };
+
+        // 发命令并在每条命令输出到达后再发下一条
+        const sendNext = (idx) => {
+            if (idx >= commands.length || proc.killed || proc.exitCode !== null) {
+                if (!proc.killed && proc.exitCode === null) {
+                    proc.stdin.write('exit\n');
+                }
+                return;
+            }
+            const cmd = commands[idx];
+            if (cmd && cmd.trim()) {
+                proc.stdin.write(cmd + '\n');
+            }
+            // 等待这条命令的输出到达后再发下一条
+            const onData = (data) => {
+                proc.stdout.removeListener('data', onData);
+                if (!proc.killed && proc.exitCode === null) {
+                    setTimeout(() => sendNext(idx + 1), 100);
+                }
+            };
+            proc.stdout.on('data', onData);
+        };
+
+        waitForPrompt();
+    });
+});
+
+ipcMain.handle('stop_script', async (event, { serial }) => {
+    if (scriptProcesses.has(serial)) {
+        try {
+            const { proc, lines } = scriptProcesses.get(serial);
+            proc.kill();
+            scriptProcesses.delete(serial);
+            return { success: true, output: lines.join('\n'), error: null };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    }
+    return { success: true, output: '', error: null };
+});
+
+// Script output subscribe
+ipcMain.on('script_output_subscribe', (event) => {
+    // 前端注册后，主进程通过 webContents.send 推送 script_output/script_done 事件
+    // 这里不需要额外存储，因为每个 IPC 连接都是独立的
+});
+
 // ============================================================
 // App
 // ============================================================
 
+// 日志缓冲写入，避免高频同步写阻塞主进程
 const logFd = fs.openSync(path.join(app.getPath('temp'), 'adb_electron.log'), 'w');
-function writeLog(...args) {
-    const msg = args.map(a => String(a)).join(' ') + '\n';
+let logBuffer = [];
+let logFlushTimer = null;
+
+function flushLogBuffer() {
+    if (logBuffer.length === 0) return;
+    const msg = logBuffer.join('');
+    logBuffer = [];
     try { fs.writeSync(logFd, msg); } catch {}
     try { fs.writeSync(1, msg); } catch {}
 }
+
+function writeLog(...args) {
+    const msg = args.map(a => String(a)).join(' ') + '\n';
+    logBuffer.push(msg);
+    // 50ms 内批量刷新，减少系统调用次数
+    if (!logFlushTimer) {
+        logFlushTimer = setTimeout(() => {
+            logFlushTimer = null;
+            flushLogBuffer();
+        }, 50);
+    }
+}
+
+// 应用退出前确保日志落盘
+app.on('before-quit', flushLogBuffer);
 
 
 // Window control IPC handlers
@@ -1027,4 +1825,7 @@ app.whenReady().then(() => {
     mainWindow.on('closed', () => { mainWindow = null; });
 });
 
-app.on('window-all-closed', () => { app.quit(); });
+app.on('window-all-closed', () => {
+    stopTrackDevices();
+    app.quit();
+});

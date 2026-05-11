@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
-import { invoke, AdbDevice, DeviceInfo, PerformanceData, CmdResult } from './api/electron-bridge'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { invoke, AdbDevice, DeviceInfo, PerformanceData, CmdResult, authStateSubscribe, authAutoStartIPC, AuthState, deviceChangeSubscribe, onAuthDeviceInfoRefresh } from './api/electron-bridge'
 import { 
-  Terminal, Package, FileText, FlaskConical, Wrench, 
+  Terminal, Package, FileCode, FlaskConical, Wrench, 
   RefreshCw, Palette, FolderOpen, Zap, Battery, Cpu, MemoryStick, 
   Activity, Clock, Smartphone, Wifi, Minus, Square, X, History
 } from 'lucide-react'
@@ -10,12 +10,12 @@ import DevicePage from './pages/DevicePage'
 import PerfPage from './pages/PerfPage'
 import ShellPage from './pages/ShellPage'
 import AppPage from './pages/AppPage'
-import LogPage from './pages/LogPage'
+import ScriptEditorPage from './pages/ScriptEditorPage'
 import TestPage from './pages/TestPage'
 import ToolsPage from './pages/ToolsPage'
 import FileManagerPage from './pages/FileManagerPage'
 import HistoryPage from './pages/HistoryPage'
-import { themes, applyTheme, saveTheme, loadTheme } from './styles/themes'
+import { themes, applyTheme, saveTheme, loadTheme, isLightTheme } from './styles/themes'
 import { getDeviceBySku } from './config/deviceConfig'
 import { addHistory } from './utils/history'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -38,7 +38,7 @@ type ProcessInfo = {
   threads?: number
 }
 
-type Page = 'device' | 'perf' | 'shell' | 'app' | 'log' | 'test' | 'tools' | 'files' | 'history'
+type Page = 'device' | 'perf' | 'shell' | 'app' | 'script' | 'test' | 'tools' | 'files' | 'history'
 
 const NAV_ITEMS = [
   { id: 'device' as Page, label: '设备管理', icon: Smartphone, shortcut: '1', color: '#00d4ff', desc: '连接设备、查看详情' },
@@ -46,15 +46,15 @@ const NAV_ITEMS = [
   { id: 'shell' as Page, label: 'Shell终端', icon: Terminal, shortcut: '3', color: '#a855f7', desc: '执行ADB Shell命令' },
   { id: 'app' as Page, label: '应用管理', icon: Package, shortcut: '4', color: '#f59e0b', desc: '安装APK、管理小程序' },
   { id: 'files' as Page, label: '文件管理', icon: FolderOpen, shortcut: '5', color: '#8b5cf6', desc: '浏览设备文件系统' },
-  { id: 'log' as Page, label: '日志查看', icon: FileText, shortcut: '6', color: '#ef4444', desc: '查看系统和应用日志' },
+  { id: 'script' as Page, label: '脚本编辑', icon: FileCode, shortcut: '6', color: '#ef4444', desc: '可视化脚本编辑与执行' },
   { id: 'test' as Page, label: '测试套件', icon: FlaskConical, shortcut: '7', color: '#ec4899', desc: '稳定性、功耗测试' },
   { id: 'tools' as Page, label: '工具箱', icon: Wrench, shortcut: '8', color: '#06b6d4', desc: '截图、WiFi、固件等工具' },
   { id: 'history' as Page, label: '历史记录', icon: History, shortcut: '9', color: '#64748b', desc: '操作历史' },
 ]
 
-const winMinimize = () => invoke('window_minimize' as any, {})
-const winMaximize = () => invoke('window_maximize' as any, {})
-const winClose = () => invoke('window_close' as any, {})
+const winMinimize = () => invoke<{}>('window_minimize', {})
+const winMaximize = () => invoke<{}>('window_maximize', {})
+const winClose = () => invoke<{}>('window_close', {})
 
 function App() {
   const [activePage, setActivePage] = useState<Page>('device')
@@ -72,25 +72,32 @@ function App() {
   const [currentTime, setCurrentTime] = useState(new Date())
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [connectedDeviceInfo, setConnectedDeviceInfo] = useState<DeviceInfo | null>(null)
+  const [authState, setAuthState] = useState<AuthState | null>(null)
 
   const showNotif = useCallback((type: string, text: string) => {
     setNotif({ type, text })
     setTimeout(() => setNotif(null), 3000)
   }, [])
 
+  // 用 ref 避免 auth callback 依赖问题
+  const refreshDeviceInfoRef = useRef<() => void>(() => {})
+  // 用 ref 捕获 devices 避免 setDevices 触发 useCallback 重建（多定时器叠加）
+  const devicesRef = useRef<AdbDevice[]>(devices ?? [])
+  devicesRef.current = devices ?? []
+
   useEffect(() => {
     const theme = themes[currentTheme]
     applyTheme(theme)
     document.body.setAttribute('data-nav-style', theme.colors.navStyle || 'fill')
     // Set html data-theme for CSS overrides
-    const isLight = currentTheme === 'light'
-    document.documentElement.setAttribute('data-theme', isLight ? 'light' : 'dark')
+    document.documentElement.setAttribute('data-theme', isLightTheme(currentTheme) ? 'light' : 'dark')
     
-    // 添加主题切换动画
-    document.body.style.transition = 'all 0.3s ease'
-    setTimeout(() => {
+    // 添加主题切换动画 — 仅对颜色相关属性过渡，避免重排性能问题
+    document.body.style.transition = 'background-color 0.3s ease, color 0.3s ease'
+    const timer = setTimeout(() => {
       document.body.style.transition = ''
     }, 300)
+    return () => clearTimeout(timer)
   }, [currentTheme])
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
@@ -104,7 +111,7 @@ function App() {
         const idx = parseInt(e.key) - 1
         if (NAV_ITEMS[idx]) setActivePage(NAV_ITEMS[idx].id)
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'r') { e.preventDefault(); refreshDevices() }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'r') { e.preventDefault(); refreshDevices(true) }
       if ((e.ctrlKey || e.metaKey) && e.key === 't') { e.preventDefault(); setShowThemePanel(p => !p) }
       if (e.key === 'Escape') setShowThemePanel(false)
     }
@@ -116,36 +123,138 @@ function App() {
     invoke<CmdResult>('check_adb_available').then(r => { if (!r?.success) showNotif('error', 'ADB 未安装') })
   }, [])
 
-  const refreshDevices = useCallback(async () => {
-    setIsRefreshing(true)
+  // 订阅 auth 状态变化（自动轮询进度）
+  useEffect(() => {
+    const unsub = authStateSubscribe((state) => {
+      setAuthState(state)
+      // 认证成功后刷新设备信息（由 auth_device_info_refresh 事件单独处理，不再在此重复）
+    })
+    return unsub
+  }, [])
+
+  // 订阅认证成功后的设备信息刷新通知（防抖：1秒内只刷新一次）
+  const authRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    const unsub = onAuthDeviceInfoRefresh(({ serial }) => {
+      console.log('[AUTH] 认证成功，刷新设备信息:', serial)
+      // 防抖：多次认证事件只触发一次刷新
+      if (authRefreshTimerRef.current) clearTimeout(authRefreshTimerRef.current)
+      authRefreshTimerRef.current = setTimeout(() => {
+        authRefreshTimerRef.current = null
+        refreshDeviceInfoRef.current?.()
+      }, 1000)
+    })
+    return unsub
+  }, [])
+
+  // 订阅 track-devices 实时设备变化（替代5秒轮询作为快速响应）
+  const trackHandledRef = useRef(new Set<string>())  // 已处理过的设备serial，防止重复
+  useEffect(() => {
+    const unsub = deviceChangeSubscribe((trackDevices) => {
+      console.log('[TRACK] 设备变化:', trackDevices)
+      if (!trackDevices || trackDevices.length < 0) return
+
+      const prevSerials = new Set((devicesRef.current ?? []).map(d => d.serial))
+      const newOnlineDevices = trackDevices.filter(d => d.state === 'device' && !prevSerials.has(d.serial))
+
+      // 更新设备列表
+      setDevices(trackDevices)
+
+      if (trackDevices.length > 0) {
+        // 如果选中的设备不在列表中，自动选第一个
+        if (!trackDevices.find(d => d.serial === selectedDevice)) {
+          setSelectedDevice(trackDevices[0].serial)
+        }
+        // 只对真正的新设备触发认证和历史记录
+        for (const d of newOnlineDevices) {
+          if (!trackHandledRef.current.has(d.serial)) {
+            trackHandledRef.current.add(d.serial)
+            authAutoStartIPC(d.serial).catch(() => {})
+            // 获取设备信息并记录历史
+            invoke<any>('get_device_info', { serial: d.serial }).then(info => {
+              setDeviceInfo(info)
+              if (info?.sku) {
+                const matched = getDeviceBySku(info.sku)
+                setConnectedDeviceInfo(matched)
+              }
+              const detail = info?.version
+                ? `版本: ${info.version} · 型号: ${info.sku || d.model || '-'} · SN: ${info.serial || d.serial}`
+                : `SN: ${d.serial}${d.model ? ' · 型号: ' + d.model : ''}`
+              addHistory({ device: d.serial, category: 'device', action: '设备连接', detail, status: 'success' })
+            }).catch(() => {
+              addHistory({ device: d.serial, category: 'device', action: '设备连接', detail: `SN: ${d.serial}${d.model ? ' · 型号: ' + d.model : ''}`, status: 'success' })
+            })
+          }
+        }
+      } else {
+        // 所有设备断开，清除已处理记录
+        setSelectedDevice('')
+        setDeviceInfo(null)
+        setConnectedDeviceInfo(null)
+        trackHandledRef.current.clear()
+      }
+
+      // 清理已断开设备的记录
+      const currentSerials = new Set(trackDevices.map(d => d.serial))
+      for (const s of trackHandledRef.current) {
+        if (!currentSerials.has(s)) trackHandledRef.current.delete(s)
+      }
+    })
+    return unsub
+  }, [selectedDevice])
+
+  // 使用 ref 存储 selectedDevice，避免 refreshDevices 因依赖变化而频繁重建
+  const selectedDeviceRef = useRef(selectedDevice)
+  selectedDeviceRef.current = selectedDevice
+
+  const refreshDevices = useCallback(async (showIndicator = false) => {
+    if (showIndicator) setIsRefreshing(true)
     try {
       const devs = await invoke<AdbDevice[]>('get_devices')
+      // 用 ref 捕获上次的设备列表，避免 setDevices 触发 useCallback 重建
+      const prevSerials = new Set((devicesRef.current ?? []).map(d => d.serial))
       setDevices(devs ?? [])
-      if ((devs?.length ?? 0) > 0 && !devs?.find(d => d.serial === selectedDevice)) {
+
+      const currentSelected = selectedDeviceRef.current
+      if ((devs?.length ?? 0) > 0 && !devs?.find(d => d.serial === currentSelected)) {
         setSelectedDevice(devs![0].serial)
-        if (devs![0].state === 'device') {
-          // Get version info for history
-          invoke<any>('get_device_info', { serial: devs![0].serial }).then(info => {
-            const detail = info?.version
-              ? `版本: ${info.version} · 型号: ${info.sku || devs![0].model || '-'} · SN: ${info.serial || devs![0].serial}`
-              : `SN: ${devs![0].serial}${devs![0].model ? ' · 型号: ' + devs![0].model : ''}`
-            addHistory({ device: devs![0].serial, category: 'device', action: '设备连接', detail, status: 'success' })
-          }).catch(() => {
-            addHistory({ device: devs![0].serial, category: 'device', action: '设备连接', detail: `SN: ${devs![0].serial}${devs![0].model ? ' · 型号: ' + devs![0].model : ''}`, status: 'success' })
-          })
+      }
+
+      for (const d of devs ?? []) {
+        if (d.state === 'device') {
+          // 始终触发认证（设备重启后 skip 脚本消失，需要重新轮询）
+          authAutoStartIPC(d.serial).catch(() => {})
+          // 新设备连接时记录历史
+          if (!prevSerials.has(d.serial)) {
+            invoke<any>('get_device_info', { serial: d.serial }).then(info => {
+              const detail = info?.version
+                ? `版本: ${info.version} · 型号: ${info.sku || d.model || '-'} · SN: ${info.serial || d.serial}`
+                : `SN: ${d.serial}${d.model ? ' · 型号: ' + d.model : ''}`
+              addHistory({ device: d.serial, category: 'device', action: '设备连接', detail, status: 'success' })
+            }).catch(() => {
+              addHistory({ device: d.serial, category: 'device', action: '设备连接', detail: `SN: ${d.serial}${d.model ? ' · 型号: ' + d.model : ''}`, status: 'success' })
+            })
+          }
         }
       }
     } catch (e) {
       console.error('获取设备列表失败:', e)
       showNotif('error', '获取设备列表失败')
     }
-    setIsRefreshing(false)
-  }, [selectedDevice])
+    if (showIndicator) setIsRefreshing(false)
+  }, []) // 空依赖数组，内部通过 ref 读取最新值
 
   useEffect(() => {
     refreshDevices()
-    const interval = setInterval(refreshDevices, 5000)
-    return () => clearInterval(interval)
+    // track-devices 实时监听作为主要推送，3秒轮询作为心跳兜底（更快响应）
+    // 窗口切回时立即刷新以获取最新状态
+    const interval = setInterval(refreshDevices, 3000)
+    const onVisible = () => { if (document.visibilityState === 'visible') refreshDevices() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [refreshDevices])
 
   useEffect(() => {
@@ -190,11 +299,13 @@ function App() {
       console.error('刷新设备信息失败:', e)
     }
   }, [selectedDevice])
+  refreshDeviceInfoRef.current = refreshDeviceInfo
 
   const pageProps = {
     selectedDevice, devices, deviceInfo, perfData,
     showNotif, onSelectDevice: setSelectedDevice, onRefreshDevices: refreshDevices,
     connectedDeviceInfo, onRefresh: refreshDeviceInfo,
+    authState, authAutoStartIPC,
     // 性能监控状态（跨 Tab 保留）
     perfHistory, setPerfHistory,
     perfLive, setPerfLive,
@@ -261,7 +372,7 @@ function App() {
           <button className="sidebar-btn" onClick={() => setShowThemePanel(true)}>
             <Palette size={16} /><span>主题</span>
           </button>
-          <button className="sidebar-btn" onClick={refreshDevices} disabled={isRefreshing}>
+          <button className="sidebar-btn" onClick={() => refreshDevices(true)} disabled={isRefreshing}>
             <RefreshCw size={16} className={isRefreshing ? 'spinning' : ''} /><span>刷新</span>
           </button>
         </div>
@@ -319,7 +430,7 @@ function App() {
             {activePage === 'perf' && <PerfPage {...pageProps} />}
             {activePage === 'shell' && <ShellPage {...pageProps} />}
             {activePage === 'app' && <AppPage {...pageProps} />}
-            {activePage === 'log' && <LogPage {...pageProps} />}
+            {activePage === 'script' && <ScriptEditorPage {...pageProps} />}
             {activePage === 'test' && <TestPage {...pageProps} />}
             {activePage === 'tools' && <ToolsPage {...pageProps} />}
             {activePage === 'files' && <FileManagerPage {...pageProps} />}
