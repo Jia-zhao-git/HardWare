@@ -83,12 +83,8 @@ function createWindow() {
         mainWindow.loadURL('http://localhost:5173');
         mainWindow.webContents.openDevTools();
     } else {
-        const distPath = getDistPath();
-        if (distPath) {
-            mainWindow.loadURL('file:///' + distPath.replace(/\\/g, '/'));
-        } else {
-            mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
-        }
+        // Production: load from asar
+        mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
     }
 
     mainWindow.on('closed', () => { mainWindow = null; });
