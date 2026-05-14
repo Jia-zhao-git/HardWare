@@ -266,23 +266,8 @@ app.on('before-quit', flushLogBuffer);
 app.whenReady().then(() => {
     writeLog('[MAIN] App ready');
 
-    // Start HTTP server for production dist/
-    const distPath = getDistPath();
-    const startApp = () => {
-        if (!mainWindow) createWindow();
-    };
-
-    if (distPath && process.env.NODE_ENV !== 'development') {
-        httpServer.start(distPath, 0).then(port => {
-            writeLog('[HTTP] Server started on port', port);
-            startApp();
-        }).catch(err => {
-            writeLog('[HTTP] Failed:', err);
-            startApp();
-        });
-    } else {
-        startApp();
-    }
+    // Create window first
+    createWindow();
 
     // Initialize shared state AFTER window is created
     setState({
