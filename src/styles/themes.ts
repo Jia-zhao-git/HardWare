@@ -297,7 +297,7 @@ export const loadTheme = (): string => {
     return migrationMap[saved];
   }
   if (saved && !themes[saved]) {
-    return 'dark';
+    return 'light';
   }
-  return saved || 'dark';
+  return saved || 'light';
 };
