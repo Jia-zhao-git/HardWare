@@ -123,6 +123,38 @@ perform_random_actions() {
     done
 }
 
+# 在等待期间执行随机操作（模拟用户在等待时的随机交互）
+perform_waiting_actions() {
+    duration=$1
+    echo "[$(get_timestamp)]   开始 $duration 秒等待期间的随机操作..."
+    
+    start_time=$(date +%s)
+    current_time=$start_time
+    
+    while [ $((current_time - start_time)) -lt $duration ]; do
+        # 随机决定操作类型
+        action=$(random_range 0 2)
+        case $action in
+            0) random_click ;;
+            1) random_swipe ;;
+            2) random_long_press ;;
+        esac
+        
+        # 随机延迟（0.5-2秒），不超过总等待时间
+        delay=$(random_range 5 20)
+        delay=$(echo $delay | awk '{print $1/10}')  # 转换为0.5-2.0秒
+        sleep $delay 2>/dev/null || sleep 1
+        
+        current_time=$(date +%s)
+        # 确保不超过总等待时间
+        if [ $((current_time - start_time)) -ge $duration ]; then
+            break
+        fi
+    done
+    
+    echo "[$(get_timestamp)]   等待期间随机操作完成"
+}
+
 # 记录内存数据
 record_memory_data() {
     current_time=$(date +%s)
@@ -174,9 +206,10 @@ while true; do
             sleep 3 || true
             send_event camera release || true
             
-            # 扫描后等待释义出现（20-70秒）
-            echo "[$(get_timestamp)] [扫描] 等待释义加载..."
-            random_delay 20 70
+            # 扫描后等待释义出现（20-70秒），期间执行随机操作
+            wait_duration=$(random_range 20 70)
+            echo "[$(get_timestamp)] [扫描] 等待释义加载 (${wait_duration}秒)..."
+            perform_waiting_actions $wait_duration
             
             # 在扫描结果页进行多次随机测试（8-15次）
             extra_actions=$(random_range 8 15)
@@ -223,9 +256,10 @@ while true; do
             echo "[$(get_timestamp)] [打开APP] 打开APP ID: $app_id"
             miniapp_cli start $app_id || true
             
-            # 打开APP后等待加载（20-70秒）
-            echo "[$(get_timestamp)] [打开APP] 等待APP加载..."
-            random_delay 20 70
+            # 打开APP后等待加载（20-70秒），期间执行随机操作
+            wait_duration=$(random_range 20 70)
+            echo "[$(get_timestamp)] [打开APP] 等待APP加载 (${wait_duration}秒)..."
+            perform_waiting_actions $wait_duration
             
             # 在APP内进行多次随机测试（10-20次）
             extra_actions=$(random_range 10 20)
@@ -239,9 +273,10 @@ while true; do
             echo "[$(get_timestamp)] [返回桌面] 返回主界面..."
             miniapp_cli start $DESKTOP_APP_ID || true
             
-            # 返回桌面后等待加载（15-40秒）
-            echo "[$(get_timestamp)] [返回桌面] 等待桌面加载..."
-            random_delay 15 40
+            # 返回桌面后等待加载（15-40秒），期间执行随机操作
+            wait_duration=$(random_range 15 40)
+            echo "[$(get_timestamp)] [返回桌面] 等待桌面加载 (${wait_duration}秒)..."
+            perform_waiting_actions $wait_duration
             
             # 在桌面上进行多次随机测试（8-12次）
             extra_actions=$(random_range 8 12)
