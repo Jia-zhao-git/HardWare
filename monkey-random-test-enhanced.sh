@@ -167,57 +167,33 @@ get_random_app() {
 }
 
 # ----------------------------
-# 优化：滑动操作（参考 monkey.sh 的分步滑动实现）
+# 优化：滑动操作（简化版，直接使用坐标）
 # ----------------------------
 random_swipe() {
     w="$WIDTH"
     h="$HEIGHT"
 
-    # 1) 滑动起点：屏幕下半部分开始（模拟自然手势）
-    u_start=$((RANDOM % w))
-    v_start=$((h / 2 + RANDOM % (h / 2)))
+    # 确保分辨率有效
+    if [ "$w" -eq 0 ] || [ "$h" -eq 0 ]; then
+        echo "[$(get_timestamp)] [警告] 分辨率无效 (${w}x${h})，跳过滑动"
+        return
+    fi
 
-    # 2) 坐标映射（u,v → x,y）
-    parse_coords "$(map_uv_to_xy "$u_start" "$v_start")"
-    x1=$COORD_X
-    y1=$COORD_Y
+    # 随机生成起点和终点坐标
+    x1=$(random_range 50 $((w - 50)))
+    y1=$(random_range 50 $((h / 2)))
+    x2=$(random_range 50 $((w - 50)))
+    y2=$(random_range $((h / 2)) $((h - 50)))
 
-    # 3) 压点
-    echo "[$(get_timestamp)] [随机滑动] 起点 ($x1, $y1)"
+    echo "[$(get_timestamp)] [随机滑动] ($x1,$y1) -> ($x2,$y2)"
+    
+    # 简单的三段式滑动：press -> move -> release
     send_event touch press $x1 $y1 || true
+    sleep 0.1 || true
+    send_event touch slip $x2 $y2 || true
+    sleep 0.1 || true
+    send_event touch release || true
     sleep 0.3 || true
-
-    # 4) 分步滑动：步长 = height / 10，限制 20-80
-    step_size=$((h / 10))
-    [ "$step_size" -lt 20 ] && step_size=20
-    [ "$step_size" -gt 80 ] && step_size=80
-
-    v_current=$v_start
-    step_count=0
-    for step in $(seq 1 5); do
-        step_count=$((step_count + 1))
-
-        # 横屏/竖屏方向不同
-        if [ "$IS_LANDSCAPE_NO_OFFSET_TYPE" = true ] || [ "$IS_LANDSCAPE_OFFSET_TYPE" = true ]; then
-            v_current=$((v_current + step_size))
-            [ "$v_current" -gt $((h - 1)) ] && v_current=$((h - 1))
-        else
-            v_current=$((v_current - step_size))
-            [ "$v_current" -lt 0 ] && v_current=0
-        fi
-
-        parse_coords "$(map_uv_to_xy "$u_start" "$v_current")"
-        x2=$COORD_X
-        y2=$COORD_Y
-        send_event touch move $x2 $y2 || true
-        sleep 0.15 || true
-    done
-
-    # 5) 释放
-    send_event touch release $x2 $y2 || true
-    sleep 0.3 || true
-
-    echo "[$(get_timestamp)] [随机滑动] 终点 ($x2, $y2), 分 ${step_count} 步完成"
 }
 
 # ----------------------------
@@ -228,71 +204,54 @@ continuous_swipe() {
     h="$HEIGHT"
     direction="$1"  # "up" 或 "down"
 
-    u_start=$((RANDOM % w))
-    v_start=""
-    v_end=""
-
-    if [ "$direction" = "up" ]; then
-        v_start=$((h - 1))  # 从底部开始（上滑）
-        v_end=0
-    else
-        v_start=0           # 从顶部开始（下滑）
-        v_end=$((h - 1))
+    # 确保分辨率有效
+    if [ "$w" -eq 0 ] || [ "$h" -eq 0 ]; then
+        echo "[$(get_timestamp)] [警告] 分辨率无效 (${w}x${h})，跳过连续滑动"
+        return
     fi
 
-    parse_coords "$(map_uv_to_xy "$u_start" "$v_start")"
-    x1=$COORD_X
-    y1=$COORD_Y
-    echo "[$(get_timestamp)] [连续滑动] 方向=$direction 起点 ($x1, $y1)"
+    # 随机选择X坐标
+    x_pos=$(random_range 50 $((w - 50)))
 
-    send_event touch press $x1 $y1 || true
+    if [ "$direction" = "up" ]; then
+        y_start=$((h - 20))
+        y_end=20
+        echo "[$(get_timestamp)] [连续滑动] 方向=上 ($x_pos,$y_start) -> ($x_pos,$y_end)"
+    else
+        y_start=20
+        y_end=$((h - 20))
+        echo "[$(get_timestamp)] [连续滑动] 方向=下 ($x_pos,$y_start) -> ($x_pos,$y_end)"
+    fi
+
+    # 简单的三段式滑动
+    send_event touch press $x_pos $y_start || true
+    sleep 0.1 || true
+    send_event touch slip $x_pos $y_end || true
+    sleep 0.1 || true
+    send_event touch release || true
     sleep 0.3 || true
-
-    step_size=$((h / 8))
-    [ "$step_size" -lt 30 ] && step_size=30
-    [ "$step_size" -gt 100 ] && step_size=100
-
-    v_current=$v_start
-    step_count=0
-    for step in $(seq 1 5); do
-        step_count=$((step_count + 1))
-        if [ "$direction" = "up" ]; then
-            v_current=$((v_current - step_size))
-            [ "$v_current" -lt $v_end ] && v_current=$v_end
-        else
-            v_current=$((v_current + step_size))
-            [ "$v_current" -gt $v_end ] && v_current=$v_end
-        fi
-
-        parse_coords "$(map_uv_to_xy "$u_start" "$v_current")"
-        x2=$COORD_X
-        y2=$COORD_Y
-        send_event touch move $x2 $y2 || true
-        sleep 0.2 || true
-    done
-
-    send_event touch release $x2 $y2 || true
-    sleep 0.3 || true
-
-    echo "[$(get_timestamp)] [连续滑动] 终点 ($x2, $y2), 分 ${step_count} 步完成"
 }
 
 # ----------------------------
-# 随机点击（使用映射坐标）
+# 随机点击（直接使用坐标）
 # ----------------------------
 random_click() {
     w="$WIDTH"
     h="$HEIGHT"
-    u_click=$((RANDOM % w))
-    v_click=$((RANDOM % h))
-    parse_coords "$(map_uv_to_xy "$u_click" "$v_click")"
-    x_click=$COORD_X
-    y_click=$COORD_Y
+
+    # 确保分辨率有效
+    if [ "$w" -eq 0 ] || [ "$h" -eq 0 ]; then
+        echo "[$(get_timestamp)] [警告] 分辨率无效 (${w}x${h})，跳过点击"
+        return
+    fi
+
+    x_click=$(random_range 20 $((w - 20)))
+    y_click=$(random_range 20 $((h - 20)))
 
     echo "[$(get_timestamp)] [随机点击] ($x_click, $y_click)"
     send_event touch press $x_click $y_click || true
     sleep 0.15 || true
-    send_event touch release $x_click $y_click || true
+    send_event touch release || true
     sleep 0.2 || true
 }
 
