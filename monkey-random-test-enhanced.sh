@@ -145,12 +145,12 @@ while true; do
             sleep 3 || true
             send_event camera release || true
             
-            # 扫描后等待释义出现（8-15秒）
+            # 扫描后等待释义出现（20-70秒）
             echo "[$(get_timestamp)] [扫描] 等待释义加载..."
-            random_delay 8 15
+            random_delay 20 70
             
-            # 在扫描结果页进行多次随机测试（5-8次）
-            extra_actions=$(random_range 5 8)
+            # 在扫描结果页进行多次随机测试（8-15次）
+            extra_actions=$(random_range 8 15)
             perform_random_actions $extra_actions
             
             echo "[$(get_timestamp)] [扫描] 完成"
@@ -194,12 +194,12 @@ while true; do
             echo "[$(get_timestamp)] [打开APP] 打开APP ID: $app_id"
             miniapp_cli start $app_id || true
             
-            # 打开APP后等待加载（5-8秒）
+            # 打开APP后等待加载（20-70秒）
             echo "[$(get_timestamp)] [打开APP] 等待APP加载..."
-            random_delay 5 8
+            random_delay 20 70
             
-            # 在APP内进行多次随机测试（6-10次）
-            extra_actions=$(random_range 6 10)
+            # 在APP内进行多次随机测试（10-20次）
+            extra_actions=$(random_range 10 20)
             perform_random_actions $extra_actions
             
             echo "[$(get_timestamp)] [打开APP] 完成"
@@ -210,12 +210,12 @@ while true; do
             echo "[$(get_timestamp)] [返回桌面] 返回主界面..."
             miniapp_cli start $DESKTOP_APP_ID || true
             
-            # 等待桌面加载（3-5秒）
+            # 返回桌面后等待加载（15-40秒）
             echo "[$(get_timestamp)] [返回桌面] 等待桌面加载..."
-            random_delay 3 5
+            random_delay 15 40
             
-            # 在桌面上进行多次随机测试（4-6次）
-            extra_actions=$(random_range 4 6)
+            # 在桌面上进行多次随机测试（8-12次）
+            extra_actions=$(random_range 8 12)
             perform_random_actions $extra_actions
             
             echo "[$(get_timestamp)] [返回桌面] 完成"
