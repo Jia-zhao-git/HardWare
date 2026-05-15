@@ -12,7 +12,7 @@
     "dev:electron": "wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .",
     "build": "tsc && vite build",
     "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder --win portable",
+    "dist": "npm run build && electron-builder --win portable --publish never",
     "start": "npm run build && electron ."
   },
   "dependencies": {
@@ -58,6 +58,7 @@
     },
     "portable": {
       "artifactName": "${productName}-${version}.${ext}"
-    }
+    },
+    "publish": null
   }
 }
