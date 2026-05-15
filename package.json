@@ -47,12 +47,6 @@
       "electron/**/*",
       "package.json"
     ],
-    "extraResources": [
-      {
-        "from": "node_modules/electron/dist/ffmpeg.dll",
-        "to": "ffmpeg.dll"
-      }
-    ],
     "win": {
       "target": [
         {
