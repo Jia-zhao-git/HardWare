@@ -15,6 +15,9 @@ APP_IDS="8001650599023931 8001666679481944 8001670668055425 8001671616562847 800
 
 # 桌面APP ID
 DESKTOP_APP_ID="8080222437664451"
+
+# 内存数据记录文件路径
+MEMORY_LOG_FILE="/data/memory_monitor.log"
 # ===============================================
 
 # 设置错误处理
@@ -28,12 +31,14 @@ done
 
 # 记录开始时间
 START_TIME=$(date +%s)
+LAST_MEMORY_CHECK=$START_TIME
 
 echo "=========================================="
 echo "开始随机Monkey测试（增强版 - 无限循环）"
 echo "APP数量: $APP_COUNT"
 echo "坐标范围: X(${MIN_X}-${MAX_X}), Y(${MIN_Y}-${MAX_Y})"
 echo "运行模式: 持续运行，手动停止"
+echo "内存监控: 每分钟记录一次 -> $MEMORY_LOG_FILE"
 echo "=========================================="
 
 # 生成随机数函数
@@ -118,6 +123,27 @@ perform_random_actions() {
     done
 }
 
+# 记录内存数据
+record_memory_data() {
+    current_time=$(date +%s)
+    elapsed=$((current_time - LAST_MEMORY_CHECK))
+    
+    # 每分钟记录一次（60秒）
+    if [ $elapsed -ge 60 ]; then
+        timestamp=$(get_timestamp)
+        memory_data=$(miniapp_cli memoryApp | grep fordblks || true)
+        
+        if [ -n "$memory_data" ]; then
+            echo "[$timestamp] $memory_data" >> $MEMORY_LOG_FILE
+            echo "[$timestamp] [内存监控] 已记录: $memory_data"
+        else
+            echo "[$timestamp] [内存监控] 获取失败" >> $MEMORY_LOG_FILE
+        fi
+        
+        LAST_MEMORY_CHECK=$current_time
+    fi
+}
+
 # 操作计数器
 operation_count=0
 last_action_type=-1
@@ -127,6 +153,9 @@ while true; do
     operation_count=$((operation_count + 1))
     echo ""
     echo "========== $(get_timestamp) 第 $operation_count 次主操作 =========="
+    
+    # 检查并记录内存数据
+    record_memory_data
     
     # 随机选择操作类型，避免连续相同操作
     while true; do
