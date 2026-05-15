@@ -187,10 +187,11 @@ random_swipe() {
 
     echo "[$(get_timestamp)] [随机滑动] ($x1,$y1) -> ($x2,$y2)"
     
-    # 简单的三段式滑动：press -> move -> release
-    send_event touch press $x1 $y1 || true
+    # 简单的三段式滑动：press -> slip -> release
+    # 注意：某些设备可能需要 Y X 的顺序
+    send_event touch press $y1 $x1 || true
     sleep 0.1 || true
-    send_event touch slip $x2 $y2 || true
+    send_event touch slip $y2 $x2 || true
     sleep 0.1 || true
     send_event touch release || true
     sleep 0.3 || true
@@ -223,10 +224,10 @@ continuous_swipe() {
         echo "[$(get_timestamp)] [连续滑动] 方向=下 ($x_pos,$y_start) -> ($x_pos,$y_end)"
     fi
 
-    # 简单的三段式滑动
-    send_event touch press $x_pos $y_start || true
+    # 简单的三段式滑动（Y X 顺序）
+    send_event touch press $y_start $x_pos || true
     sleep 0.1 || true
-    send_event touch slip $x_pos $y_end || true
+    send_event touch slip $y_end $x_pos || true
     sleep 0.1 || true
     send_event touch release || true
     sleep 0.3 || true
@@ -249,7 +250,7 @@ random_click() {
     y_click=$(random_range 20 $((h - 20)))
 
     echo "[$(get_timestamp)] [随机点击] ($x_click, $y_click)"
-    send_event touch press $x_click $y_click || true
+    send_event touch press $y_click $x_click || true
     sleep 0.15 || true
     send_event touch release || true
     sleep 0.2 || true
