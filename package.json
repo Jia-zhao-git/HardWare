@@ -11,6 +11,7 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .",
     "build": "tsc && vite build",
+    "clean": "if exist release rmdir /s /q release",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder --win portable --publish never",
     "start": "npm run build && electron ."
