@@ -86,9 +86,11 @@ random_swipe() {
     x2=$(random_range $MIN_X $MAX_X)
     y2=$(random_range $MIN_Y $MAX_Y)
     echo "[$(get_timestamp)]   [随机滑动] ($x1,$y1) -> ($x2,$y2)"
+    
+    # 尝试使用 move 命令代替 slip
     send_event touch press $x1 $y1 || true
     sleep 0.05 || true
-    send_event touch slip $x2 $y2 || true
+    send_event touch move $x2 $y2 || true
     sleep 0.1 || true
     send_event touch release || true
     sleep 0.3 || true
@@ -242,7 +244,7 @@ while true; do
             
             send_event touch press $x1 $y1 || true
             sleep 0.05 || true
-            send_event touch slip $x2 $y2 || true
+            send_event touch move $x2 $y2 || true
             sleep 0.1 || true
             send_event touch release || true
             
