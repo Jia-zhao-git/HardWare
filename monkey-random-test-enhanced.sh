@@ -291,45 +291,24 @@ random_click() {
 
     echo "[$(get_timestamp)] [随机点击] ($x_click, $y_click)"
     send_event touch press $x_click $y_click || true
+    sleep 0.15 || true
+    send_event touch release $x_click $y_click || true
     sleep 0.2 || true
-    send_event touch release $x_click $y_click || true
-    sleep 0.1 || true
 }
 
 # ----------------------------
-# 随机长按（使用映射坐标）
-# ----------------------------
-random_long_press() {
-    w="$WIDTH"
-    h="$HEIGHT"
-    u_click=$((RANDOM % w))
-    v_click=$((RANDOM % h))
-    parse_coords "$(map_uv_to_xy "$u_click" "$v_click")"
-    x_click=$COORD_X
-    y_click=$COORD_Y
-
-    duration=$(random_range 1 2)
-    echo "[$(get_timestamp)] [随机长按] ($x_click, $y_click) ${duration}秒"
-    send_event touch press $x_click $y_click || true
-    sleep $duration || true
-    send_event touch release $x_click $y_click || true
-    sleep 0.5 || true
-}
-
-# ----------------------------
-# 在页面上执行多次随机操作
+# 在页面上执行多次随机操作（只包含点击和滑动）
 # ----------------------------
 perform_random_actions() {
     count=$1
     echo "[$(get_timestamp)] 执行 $count 次随机操作..."
     i=0
     while [ $i -lt $count ]; do
-        # 0:点击, 1:滑动, 2:长按
-        action=$(random_range 0 2)
+        # 0:点击, 1:滑动（各50%概率）
+        action=$(random_range 0 1)
         case $action in
             0) random_click ;;
             1) random_swipe ;;
-            2) random_long_press ;;
         esac
         i=$((i + 1))
     done
@@ -346,15 +325,15 @@ perform_waiting_actions() {
     current_time=$start_time
 
     while [ $((current_time - start_time)) -lt $duration ]; do
-        action=$(random_range 0 2)
+        # 0:点击, 1:滑动（各50%概率）
+        action=$(random_range 0 1)
         case $action in
             0) random_click ;;
             1) random_swipe ;;
-            2) random_long_press ;;
         esac
 
-        # 随机延迟（0.5-2秒），不超过总等待时间
-        delay=$(random_range 5 20)
+        # 随机延迟（0.3-1.5秒），不超过总等待时间
+        delay=$(random_range 3 15)
         delay=$(echo $delay | awk '{print $1/10}')
         sleep $delay 2>/dev/null || sleep 1
 
