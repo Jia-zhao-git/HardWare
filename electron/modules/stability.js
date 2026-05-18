@@ -34,19 +34,25 @@ async function start_stability_test(event, { serial, testType }) {
             }
             resolve({ success: false, output: '', error: e.message });
         });
-        // Monkey 测试: 100000 次随机事件
-        const monkeyCmd = `monkey -p com.youdao.dict -c android.intent.category.LAUNCHER 100000 &\n`;
-        // 其他测试: 50000 次
-        const monkeyCmd50 = `monkey -p com.youdao.dict -c android.intent.category.LAUNCHER 50000 &\n`;
-        // Grafana 脚本测试
-        const grafanaCmd = `grafana-stability-test.sh &\n`;
+        // Monkey 测试: 执行 /data/monkey.sh
+        const monkeyCmd = `sh /data/monkey.sh &\n`;
+        // Grafana 脚本测试: 执行 /data/grafana.sh
+        const grafanaCmd = `sh /data/grafana.sh &\n`;
         
-        if (testType === 'monkey') {
-            proc.stdin.write(monkeyCmd);
+        if (testType === 'scan') {
+            // 扫描稳定性：传递 scan 参数
+            proc.stdin.write(`sh /data/monkey.sh scan &\n`);
+        } else if (testType === 'random') {
+            // 随机稳定性：传递 random 参数
+            proc.stdin.write(`sh /data/monkey.sh random &\n`);
+        } else if (testType === 'mem') {
+            // 内存记录：传递 mem 参数
+            proc.stdin.write(`sh /data/monkey.sh mem &\n`);
         } else if (testType === 'grafana') {
             proc.stdin.write(grafanaCmd);
         } else {
-            proc.stdin.write(monkeyCmd50);
+            // 默认执行 monkey.sh
+            proc.stdin.write(monkeyCmd);
         }
         proc.stdin.write('exit\n');
         // 不提前关闭，让进程在后台继续运行
@@ -81,7 +87,19 @@ async function start_power_test(event, { serial, testType }) {
             }
             resolve({ success: false, output: '', error: e.message });
         });
-        proc.stdin.write(`power_test.sh &\n`);
+        // 根据测试类型执行不同的功耗脚本
+        let powerCmd;
+        if (testType === 'idle') {
+            // 屏幕常亮功耗
+            powerCmd = `sh /data/power_test.sh idle &\n`;
+        } else if (testType === 'ocr') {
+            // 扫描功耗
+            powerCmd = `sh /data/power_test.sh ocr &\n`;
+        } else {
+            // 默认执行
+            powerCmd = `sh /data/power_test.sh &\n`;
+        }
+        proc.stdin.write(powerCmd);
         proc.stdin.write('exit\n');
         resolve({ success: true, output: '已启动功耗测试', error: null });
     });
