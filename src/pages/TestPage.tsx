@@ -169,11 +169,16 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
       const r = await invoke<CollectResult>('collect_stability_results', { serial: selectedDevice })
       if (r?.success) {
         const dur = r.duration
+        const resultPath = `D:\\HardWare\\Stableness\\${selectedDevice}`
         const msg = dur
-          ? `✅ 收集成功\n⏱ 时长: ${dur.duration_formatted}\n🕐 开始: ${dur.start_time}\n🕐 结束: ${dur.end_time}\n📁 路径: D:\\HardWare\\Stableness\\${selectedDevice}`
+          ? `✅ 收集成功\n⏱ 时长: ${dur.duration_formatted}\n🕐 开始: ${dur.start_time}\n🕐 结束: ${dur.end_time}\n📁 路径: ${resultPath}`
           : `✅ 稳定性结果已收集`
         setStabilityResult(msg)
         showNotif('success', '稳定性结果收集完成')
+        // 自动打开结果目录
+        try {
+          await invoke('open_file_location', { filePath: resultPath })
+        } catch (_) { /* 非关键 */ }
       } else {
         const msg = `❌ 收集失败: ${r?.error || '未知错误'}`
         setStabilityResult(msg)
@@ -216,11 +221,19 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
   const startBatteryLog = async () => {
     if (!selectedDevice) return
     setRunning(true); addLog('[功耗] 启动电量记录...')
+    setActiveTests(prev => ({ ...prev, ['单电量记录']: { name: '单电量记录', status: 'running', output: '', startTime: Date.now() } }))
     try {
       const r = await invoke<CmdResult>('start_battery_log', { serial: selectedDevice })
-      showNotif(r?.success ? 'success' : 'error', r?.success ? '电量记录已启动' : r?.error || '启动失败')
-      addLog(`[功耗] ${r?.success ? '电量记录已启动' : '启动失败'}`)
-    } catch (e) { showNotif('error', String(e)) }
+      const status = r?.success ? 'success' : 'error'
+      setActiveTests(prev => ({ ...prev, ['单电量记录']: { ...prev['单电量记录'], status, output: r?.output || r?.error || '' } }))
+      if (!r?.success) {
+        showNotif('error', r?.error || '启动失败')
+      }
+      addLog(`[功耗] 电量记录: ${r?.success ? '已启动' : '失败 - ' + (r?.error || '')}`)
+    } catch (e) {
+      setActiveTests(prev => ({ ...prev, ['单电量记录']: { ...prev['单电量记录'], status: 'error', output: String(e) } }))
+      showNotif('error', `单电量记录异常: ${e}`)
+    }
     setRunning(false)
   }
 
@@ -232,11 +245,16 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
       const r = await invoke<CollectResult>('collect_battery_log', { serial: selectedDevice })
       if (r?.success) {
         const dur = r.duration
+        const resultPath = `D:\\HardWare\\Stableness\\${selectedDevice}`
         const msg = dur
-          ? `✅ 收集成功\n⏱ 时长: ${dur.duration_formatted}\n🕐 开始: ${dur.start_time}\n🕐 结束: ${dur.end_time}\n📁 路径: D:\\HardWare\\Stableness\\${selectedDevice}`
+          ? `✅ 收集成功\n⏱ 时长: ${dur.duration_formatted}\n🕐 开始: ${dur.start_time}\n🕐 结束: ${dur.end_time}\n📁 路径: ${resultPath}`
           : `✅ 功耗记录已收集`
         setBatteryResult(msg)
         showNotif('success', '功耗记录收集完成')
+        // 自动打开结果目录
+        try {
+          await invoke('open_file_location', { filePath: resultPath })
+        } catch (_) { /* 非关键 */ }
       } else {
         const msg = `❌ 收集失败: ${r?.error || '未知错误'}`
         setBatteryResult(msg)
@@ -334,7 +352,20 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
             <Download size={12} /> 收集结果
           </button>
         </div>
-        {/* Stability result output */}
+        {/* Process output inside stability card */}
+        {processOutput && (
+          <div className="terminal" style={{ marginTop: 10 }}>
+            <div className="terminal-header">
+              <div className="terminal-dots"><span /><span /><span /></div>
+              <div className="terminal-title">进程状态</div>
+              <button className="icon-btn" onClick={() => setProcessOutput('')}><Trash2 size={11} /></button>
+            </div>
+            <div className="terminal-output" style={{ maxHeight: 200 }}>
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{processOutput}</pre>
+            </div>
+          </div>
+        )}
+        {/* Stability collect result output */}
         {stabilityResult && (
           <div className="collect-result-box" style={{ marginTop: 10 }}>
             <div className="collect-result-header">
@@ -428,24 +459,10 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
                 )}
                 <span style={{ flex: 1 }}>{test.name}</span>
                 <span className={'badge badge-' + (test.status === 'success' ? 'green' : test.status === 'error' ? 'red' : 'blue')}>
-                  {test.status === 'running' ? '运行中' : test.status === 'success' ? '完成' : '失败'}
+                  {test.status === 'running' ? '运行中' : test.status === 'success' ? '成功' : '失败'}
                 </span>
               </div>
             ))}
-          </div>
-        </div>
-      )}
-
-      {/* Process Output */}
-      {processOutput && (
-        <div className="terminal" style={{ marginTop: 16 }}>
-          <div className="terminal-header">
-            <div className="terminal-dots"><span /><span /><span /></div>
-            <div className="terminal-title">进程状态</div>
-            <button className="icon-btn" onClick={() => setProcessOutput('')}><Trash2 size={11} /></button>
-          </div>
-          <div className="terminal-output" style={{ maxHeight: 200 }}>
-            <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{processOutput}</pre>
           </div>
         </div>
       )}

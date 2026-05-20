@@ -1,6 +1,6 @@
 // electron/main.js - Modular router (~250 lines)
 
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -207,6 +207,22 @@ function registerStabilityHandlers() {
 // ============================================================================
 function registerMiscHandlers() {
     if (misc.collect_battery_log) ipcMain.handle('collect_battery_log', misc.collect_battery_log);
+    // open_file_location: 在Windows资源管理器中打开文件/目录
+    ipcMain.handle('open_file_location', async (_event, { filePath }) => {
+        try {
+            const normalizedPath = path.normalize(filePath);
+            if (!fs.existsSync(normalizedPath)) {
+                fs.mkdirSync(normalizedPath, { recursive: true });
+            }
+            // 使用 explorer 直接打开目录，最可靠的方式
+            const { exec } = require('child_process');
+            exec(`explorer "${normalizedPath}"`);
+            return { success: true };
+        } catch (e) {
+            console.error('[open_file_location] error:', e.message);
+            return { success: false, error: e.message };
+        }
+    });
 }
 
 // ============================================================================

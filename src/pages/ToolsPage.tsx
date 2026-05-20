@@ -210,7 +210,9 @@ export default function ToolsPage({ selectedDevice, showNotif }: Props) {
       const r = await invoke<CmdResult>('screenshot', { serial: selectedDevice })
       if (r?.success && r.output) {
         setScreenshotPreview({ isOpen: true, path: r.output })
+        const screenpath = `D:\\HardWare\\Screen`
         showNotif('success', `截图已保存到: ${r.output}`)
+        try { await invoke('open_file_location', { filePath: screenpath }) } catch (_) { /* 非关键 */ }
       } else {
         showNotif('error', r?.error || '截图失败')
       }
@@ -225,6 +227,8 @@ export default function ToolsPage({ selectedDevice, showNotif }: Props) {
       const r = await invoke<CmdResult>('extract_logs', { serial: selectedDevice })
       if (r?.success) {
         showNotif('success', `日志已提取到: ${r.output}`)
+        // 自动打开日志目录
+        try { await invoke('open_file_location', { filePath: 'D:\\HardWare\\LOG' }) } catch (_) { /* 非关键 */ }
       } else {
         showNotif('error', r?.error || '提取失败')
       }
