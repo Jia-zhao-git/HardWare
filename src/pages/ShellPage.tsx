@@ -12,22 +12,64 @@ interface HistoryEntry {
 type ShellTab = 'shell' | 'process' | 'log' | 'sysinfo'
 
 const COMMON_COMMANDS = [
-  { cmd: 'ls -la /data/', desc: '列出文件' },
-  { cmd: 'ps -A', desc: '所有进程' },
-  { cmd: 'top -n 1', desc: '系统资源' },
+  // 系统信息
+  { cmd: 'getprop | grep -E "version|build|product|sku"', desc: '系统属性' },
+  { cmd: 'cat /proc/cpuinfo | head -10', desc: 'CPU信息' },
+  { cmd: 'cat /proc/meminfo | head -10', desc: '内存信息' },
   { cmd: 'df -h', desc: '磁盘空间' },
-  { cmd: 'cat /proc/meminfo', desc: '内存信息' },
-  { cmd: 'getprop', desc: '系统属性' },
-  { cmd: 'dumpsys battery', desc: '电池信息' },
-  { cmd: 'logcat -d -t 30', desc: '最近日志' },
+  { cmd: 'uname -a', desc: '内核版本' },
+  { cmd: 'uptime', desc: '运行时间' },
+  
+  // 进程与资源
+  { cmd: 'ps -A', desc: '所有进程' },
+  { cmd: 'top -n 1 | head -20', desc: '系统资源' },
+  { cmd: 'cat /sys/class/power_supply/battery/capacity', desc: '电量百分比' },
+  { cmd: 'cat /sys/class/power_supply/battery/uevent', desc: '电池详情' },
+  
+  // 网络
   { cmd: 'netstat -an', desc: '网络连接' },
-  { cmd: 'cat /proc/cpuinfo', desc: 'CPU信息' },
-  { cmd: 'dumpsys power', desc: '电源状态' },
+  { cmd: 'ifconfig wlan0', desc: 'WiFi信息' },
+  { cmd: 'ip addr show', desc: '网络接口' },
+  
+  // 存储与文件
+  { cmd: 'ls -la /data/', desc: 'data目录' },
+  { cmd: 'ls -la /userdisk/', desc: 'userdisk目录' },
+  { cmd: 'du -sh /data/* 2>/dev/null | sort -rh | head -10', desc: '目录大小' },
+  { cmd: 'cat /proc/partitions', desc: '分区信息' },
+  
+  // 日志
+  { cmd: 'logcat -d -t 30', desc: '最近日志(logcat)' },
+  { cmd: 'tail -50 /data/syslog/messages', desc: '系统日志' },
+  { cmd: 'tail -50 /data/applog/YD_PEN_APP.log 2>/dev/null || echo "无应用日志"', desc: '应用日志' },
+  
+  // 电源与显示
+  { cmd: 'dumpsys battery', desc: '电池状态' },
+  { cmd: 'dumpsys power | head -20', desc: '电源状态' },
   { cmd: 'wm size', desc: '屏幕分辨率' },
-  { cmd: 'dumpsys window', desc: '窗口信息' },
-  { cmd: 'getprop ro.build.version.release', desc: '安卓版本' },
-  { cmd: 'cat /sys/class/power_supply/battery/capacity', desc: '电量' },
-  { cmd: 'dumpsys activity top', desc: '前台Activity' },
+  { cmd: 'dumpsys window | head -20', desc: '窗口信息' },
+  
+  // 应用与Activity
+  { cmd: 'dumpsys activity top | head -20', desc: '前台Activity' },
+  { cmd: 'pm list packages', desc: '已安装包' },
+  { cmd: 'cat /etc/miniapp/resources/cfg.json 2>/dev/null', desc: '屏幕配置' },
+  { cmd: 'cat /data/cfg/sys_config.conf 2>/dev/null | head -20', desc: '系统配置' },
+  
+  // 词典笔专用
+  { cmd: 'miniapp_cli capture /tmp/test.png', desc: '截图' },
+  { cmd: 'miniapp_cli memoryApp', desc: '内存用量' },
+  { cmd: 'miniapp_cli memoryUsage', desc: 'JS内存' },
+  { cmd: 'boottime', desc: '开机时间' },
+  { cmd: 'show_sysmem_status.sh', desc: '内存状态' },
+  { cmd: 'cat /Version', desc: '固件版本' },
+  { cmd: 'grep sku /data/cfg/sys_config.conf', desc: 'SKU型号' },
+  { cmd: 'cat /tmp/UpdateInfo 2>/dev/null', desc: '分区信息' },
+  { cmd: 'ps | grep miniapp', desc: 'MiniApp进程' },
+  
+  // 测试相关
+  { cmd: 'ps | grep -E "monkey|smoke|grafana" | grep -v grep', desc: '测试进程' },
+  { cmd: 'tail -30 /data/smoke_test/smoke.log 2>/dev/null || echo "无smoke日志"', desc: 'Smoke日志' },
+  { cmd: 'cat /data/smoke_test/cycle_count.txt 2>/dev/null || echo "无"', desc: 'Smoke周期' },
+  { cmd: 'cat /data/smoke_test/results.txt 2>/dev/null || echo "无"', desc: 'Smoke结果' },
 ]
 
 export default function ShellPage({ selectedDevice, showNotif }: Props) {

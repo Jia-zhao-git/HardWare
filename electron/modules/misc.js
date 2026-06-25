@@ -96,7 +96,7 @@ async function collect_battery_log(event, { serial }) {
     const resultDirFwd = resultDir.replace(/\\/g, '/');
 
     // 只拉取电池日志文件
-    const r1 = await runAdb(['pull', '/data/battery_info.log', resultDirFwd], serial, 30000);
+    const r1 = await runAdb(['pull', '/userdata/battery_info.log', resultDirFwd], serial, 30000);
 
     // Calculate duration from battery log
     let durationInfo = null;

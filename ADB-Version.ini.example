@@ -1,0 +1,10 @@
+[version]
+latest=1.0.1
+disabled=0
+url=https://github.com/Jia-zhao-git/HardWare/releases/download/v1.0.1/HardWare-1.0.1.exe
+message=发现新版本 v1.0.1
+changelog=
+1. 新增自动更新检测功能
+2. 优化电池后台记录稳定性
+3. 修复若干已知Bug
+4. 更新应用图标

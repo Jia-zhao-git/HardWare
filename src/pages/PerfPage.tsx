@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '../api/electron-bridge'
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, BarChart, Bar, Cell
 } from 'recharts'
 import { Play, Square } from 'lucide-react'
 
@@ -33,6 +33,13 @@ interface DataPoint {
   batTemp: number
   memUsedGb?: number
   memTotalGb?: number
+  cpuFreq?: string
+  uptime?: string
+  diskUsed?: string
+  diskTotal?: string
+  diskPct?: number
+  netRx?: number
+  netTx?: number
 }
 
 const INTERVALS = [
@@ -118,7 +125,16 @@ export default function PerfPage({
         const now = new Date()
         const t = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`
 
-        const point: DataPoint = { time: t, t: now.getTime(), cpu, mem: memPct, battery, cpuTemp, batTemp, memUsedGb, memTotalGb }
+        // 额外系统信息 - 如果返回中存在则解析
+        const cpuFreq = r.cpu_freq || ''
+        const uptime = r.uptime || ''
+        const diskUsed = r.disk_used || ''
+        const diskTotal = r.disk_total || ''
+        const diskPct = r.disk_pct ? parseFloat(r.disk_pct) : 0
+        const netRx = r.net_rx ? parseFloat(r.net_rx) : 0
+        const netTx = r.net_tx ? parseFloat(r.net_tx) : 0
+
+        const point: DataPoint = { time: t, t: now.getTime(), cpu, mem: memPct, battery, cpuTemp, batTemp, memUsedGb, memTotalGb, cpuFreq, uptime, diskUsed, diskTotal, diskPct, netRx, netTx }
         
         // 更新本地状态（限制最大 5000 条数据，防止内存溢出）
         setLive(point)
@@ -388,25 +404,41 @@ export default function PerfPage({
           <div className="card-title">内存详情</div>
           {live ? (
             <div className="mem-detail-grid">
-              <div className="mem-detail-item">
-                <span className="mem-detail-value">{live.memTotalGb ? `${live.memTotalGb} GB` : '-'}</span>
-                <span className="mem-detail-label">总内存</span>
-              </div>
-              <div className="mem-detail-item">
-                <span className="mem-detail-value" style={{ color: live.mem > 80 ? 'var(--accent-error)' : 'var(--accent-primary)' }}>
-                  {live.memUsedGb != null ? `${live.memUsedGb} GB` : '-'}
-                </span>
-                <span className="mem-detail-label">已用内存</span>
-              </div>
-              <div className="mem-detail-item">
-                <span className="mem-detail-value">{(live.memTotalGb != null && live.memUsedGb != null) ? `${(live.memTotalGb - live.memUsedGb).toFixed(2)} GB` : '-'}</span>
-                <span className="mem-detail-label">可用内存</span>
-              </div>
-              <div className="mem-detail-item">
-                <span className="mem-detail-value" style={{ color: live.mem > 80 ? 'var(--accent-error)' : live.mem > 60 ? 'var(--accent-warning)' : 'var(--accent-secondary)' }}>
-                  {live.mem.toFixed(1)}%
-                </span>
-                <span className="mem-detail-label">占用率</span>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, flex: 1 }}>
+                  <div className="mem-detail-item">
+                    <span className="mem-detail-value">{live.memTotalGb ? `${live.memTotalGb} GB` : '-'}</span>
+                    <span className="mem-detail-label">总内存</span>
+                  </div>
+                  <div className="mem-detail-item">
+                    <span className="mem-detail-value" style={{ color: live.mem > 80 ? 'var(--accent-error)' : 'var(--accent-primary)' }}>
+                      {live.memUsedGb != null ? `${live.memUsedGb} GB` : '-'}
+                    </span>
+                    <span className="mem-detail-label">已用内存</span>
+                  </div>
+                  <div className="mem-detail-item">
+                    <span className="mem-detail-value">{(live.memTotalGb != null && live.memUsedGb != null) ? `${(live.memTotalGb - live.memUsedGb).toFixed(2)} GB` : '-'}</span>
+                    <span className="mem-detail-label">可用内存</span>
+                  </div>
+                  <div className="mem-detail-item">
+                    <span className="mem-detail-value" style={{ color: live.mem > 80 ? 'var(--accent-error)' : live.mem > 60 ? 'var(--accent-warning)' : 'var(--accent-secondary)' }}>
+                      {live.mem.toFixed(1)}%
+                    </span>
+                    <span className="mem-detail-label">占用率</span>
+                  </div>
+                </div>
+                {/* 内存使用率柱状图 */}
+                <div style={{ width: 120, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                  <ResponsiveContainer width="100%" height={100}>
+                    <BarChart data={[{ name: '已用', value: live.memUsedGb ?? 0 }, { name: '可用', value: (live.memTotalGb ?? 0) - (live.memUsedGb ?? 0) }]}>
+                      <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                        <Cell fill={live.mem > 80 ? '#ef4444' : live.mem > 60 ? '#f59e0b' : '#3b82f6'} />
+                        <Cell fill="var(--border-color)" />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>已用 / 可用 (GB)</span>
+                </div>
               </div>
               <div className="mem-detail-bar">
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>
@@ -432,6 +464,108 @@ export default function PerfPage({
           )}
         </div>
       </div>
+
+      {/* System Extended Info */}
+      {live && (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 16 }}>
+        {/* CPU & Uptime */}
+        <div className="card" style={{ padding: 12 }}>
+          <div className="card-title" style={{ marginBottom: 8 }}>⚡ 系统状态</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>CPU 频率</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent-primary)', fontFamily: 'monospace' }}>
+                {live.cpuFreq || '-'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>运行时间</span>
+              <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                {live.uptime || '-'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>CPU 温度</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: tempColor(live.cpuTemp ?? 0), fontFamily: 'monospace' }}>
+                {live.cpuTemp?.toFixed(1) ?? '-'}°C
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>电池温度</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: tempColor(live.batTemp ?? 0), fontFamily: 'monospace' }}>
+                {live.batTemp?.toFixed(1) ?? '-'}°C
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Disk Info */}
+        <div className="card" style={{ padding: 12 }}>
+          <div className="card-title" style={{ marginBottom: 8 }}>💾 磁盘</div>
+          {live.diskTotal ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>总容量</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
+                  {live.diskTotal}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>已用</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent-warning)', fontFamily: 'monospace' }}>
+                  {live.diskUsed}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>使用率</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: (live.diskPct ?? 0) > 90 ? 'var(--accent-error)' : 'var(--accent-secondary)', fontFamily: 'monospace' }}>
+                  {live.diskPct?.toFixed(1) ?? '-'}%
+                </span>
+              </div>
+              <div style={{ marginTop: 4 }}>
+                <div className="progress-bar" style={{ height: 6, borderRadius: 3 }}>
+                  <div className={`progress-fill ${(live.diskPct ?? 0) > 90 ? 'red' : (live.diskPct ?? 0) > 70 ? 'yellow' : 'green'}`}
+                    style={{ width: `${Math.min(live.diskPct ?? 0, 100)}%`, transition: 'width 0.5s ease' }} />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '10px 0', textAlign: 'center' }}>磁盘数据采集中...</div>
+          )}
+        </div>
+
+        {/* Network & Battery */}
+        <div className="card" style={{ padding: 12 }}>
+          <div className="card-title" style={{ marginBottom: 8 }}>🌐 网络 & 电池</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>网络 RX</span>
+              <span style={{ fontSize: 11, color: 'var(--accent-primary)', fontFamily: 'monospace' }}>
+                {live.netRx != null ? `${(live.netRx / 1024).toFixed(1)} KB` : '-'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>网络 TX</span>
+              <span style={{ fontSize: 11, color: 'var(--accent-secondary)', fontFamily: 'monospace' }}>
+                {live.netTx != null ? `${(live.netTx / 1024).toFixed(1)} KB` : '-'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>电池电量</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: batColor(live.battery ?? 0), fontFamily: 'monospace' }}>
+                {live.battery?.toFixed(0) ?? '-'}%
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>电池温度</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: tempColor(live.batTemp ?? 0), fontFamily: 'monospace' }}>
+                {live.batTemp?.toFixed(1) ?? '-'}°C
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+      )}
     </div>
   )
 }

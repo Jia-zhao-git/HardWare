@@ -64,8 +64,10 @@ swipe_left()       { swipe 620 86 20 86 7;            sleep 1.2; }  # 桌面翻�
 swipe_right()      { swipe 20 86 620 86 7;            sleep 1.2; }
 scroll_up()        { swipe $CENTER_X $BOTTOM_Y $CENTER_X $MY 6;    sleep 0.5; }  # 页面内上滑
 scroll_down()      { swipe $CENTER_X $MY $CENTER_X $BOTTOM_Y 6;    sleep 0.5; }
-pull_statusbar()   { swipe $CENTER_X 1 $CENTER_X 100 8;            sleep 1; }     # 顶部下拉→状态栏
-go_home()          { send_event asr press >/dev/null 2>&1; sleep 0.3
+pull_statusbar()   { swipe $CENTER_X 40 $CENTER_X 150 8;            sleep 0.5; }     # 页面下滑
+
+go_home()          { pull_statusbar
+                     send_event asr press >/dev/null 2>&1; sleep 0.3
                      send_event asr release >/dev/null 2>&1; sleep 0.8; }
 start_scan()       { send_event camera press >/dev/null 2>&1; sleep ${1:-2}
                      send_event camera release >/dev/null 2>&1; sleep 1.5; }
@@ -73,6 +75,11 @@ press_menu()       { send_event menu press >/dev/null 2>&1; sleep 0.3
                      send_event menu release >/dev/null 2>&1; sleep 0.8; }
 press_power()      { send_event power press >/dev/null 2>&1; sleep 0.2
                      send_event power release >/dev/null 2>&1; sleep 1; }
+press_statusbar() { send_event asr press >/dev/null 2>&1; sleep 0.1
+                send_event asr release >/dev/null 2>&1; sleep 0.1;
+                 send_event asr press >/dev/null 2>&1; sleep 0.1
+                send_event asr release >/dev/null 2>&1; sleep 0.2;
+}
 
 # ---- 通用: 进入某个功能后做深度探索（不按语音键，避免退出）----
 explore_inpage() {
@@ -113,7 +120,8 @@ test_desktop_traversal() {
             ay=$(random_range 15 150)
             log_msg "  P${pg} 点击应用 ($ax, $ay)"
             click $ax $ay; page_inc; sleep 2
-            explore_inpage "P${pg}A${a}" 4
+            test_rapid_tap
+            explore_inpage "P${pg}A${a}" 8
             go_home; sleep 1
             a=$((a + 1))
         done
@@ -156,11 +164,14 @@ test_scan_deep() {
     log_msg "=== 场景3: 扫描深度测试 ==="
     go_home; sleep 1
     r=0
-    while [ $r -lt 2 ]; do
+    while [ $r -lt 5 ]; do
         log_msg "  扫描轮 $((r+1))"
         start_scan $(random_range 1 3)
         sleep $(random_range 3 6)
-        explore_inpage "scan" 5
+        explore_inpage "scan" 8
+        scroll_up; sleep 0.5; page_inc
+        explore_inpage "scan" 8
+        sleep 8
         go_home; sleep 1
         r=$((r + 1))
     done
@@ -203,14 +214,17 @@ test_boundary() {
 
 # ---- 场景7: 快速连点 ----
 test_rapid_tap() {
-    log_msg "=== 场景7: 快速连点 ==="
-    cx=$(random_range 100 540); cy=$(random_range 30 140)
-    log_msg "  ($cx, $cy) × 30"
+    tap_count=${1:-30}
+    # log_msg "=== 场景7: 快速连点 ==="
+    # log_msg "  随机坐标 × ${tap_count}"
     i=0
-    while [ $i -lt 30 ]; do
+    while [ $i -lt $tap_count ]; do
+        cx=$(random_range 10 630); cy=$(random_range 10 160)
+        # log_msg "    点击 #$((i+1)): ($cx, $cy)"
         send_event touch press $cx $cy >/dev/null 2>&1; sleep 0.05
         send_event touch release >/dev/null 2>&1; sleep 0.05
         i=$((i + 1))
+        sleep 1
     done
     sleep 1; page_inc
 }
@@ -220,7 +234,7 @@ test_menu() {
     log_msg "=== 场景8: 菜单探索 ==="
     go_home; sleep 1
     press_menu; sleep 2
-    explore_inpage "menu" 4
+    explore_inpage "menu" 8
     go_home
 }
 
@@ -229,13 +243,13 @@ test_scan_burst() {
     log_msg "=== 场景9: 连续扫描 ==="
     go_home; sleep 1
     b=0
-    while [ $b -lt 3 ]; do
+    while [ $b -lt 5 ]; do
         log_msg "  扫描 #$b"
         send_event camera press >/dev/null 2>&1; sleep 1
         send_event camera release >/dev/null 2>&1; sleep 1
         b=$((b + 1)); page_inc
     done
-    sleep 4; go_home
+    sleep 8; go_home
 }
 
 # ---- 场景10: 上下滑动回弹 ----
@@ -260,11 +274,22 @@ test_asr_nav() {
     while [ $r -lt 4 ]; do
         # 进入不同应用
         click $(random_range 80 560) $(random_range 20 130); sleep 2; page_inc
-        explore_inpage "asr_test" 2
+        explore_inpage "asr_test" 8
         # 按语音键返回
         log_msg "  按语音键返回"; go_home
         r=$((r + 1))
     done
+}
+
+test_two_cycle() { 
+    log_msg "=== 测试二屏应用 ==="
+    go_home; sleep 1
+    scroll_up; sleep 0.5; page_inc
+    test_rapid_tap
+    go_home; sleep 1
+    scroll_up; sleep 0.5; page_inc
+    test_rapid_tap
+
 }
 
 # ---- 内存 ----
@@ -296,6 +321,7 @@ main() {
             test_scan_burst
             test_scroll_bounce
             test_asr_nav
+            test_two_cycle
         else
             log_msg "[模式] 核心 (6场景)"
             test_desktop_traversal
@@ -304,6 +330,7 @@ main() {
             test_stress_mix
             test_boundary
             test_asr_nav
+            test_two_cycle
         fi
 
         go_home; sleep 1

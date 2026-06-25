@@ -26,6 +26,9 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
   // Collect results output areas
   const [stabilityResult, setStabilityResult] = useState<string | null>(null)
   const [batteryResult, setBatteryResult] = useState<string | null>(null)
+  const [deviceInfo, setDeviceInfo] = useState<any>(null)
+  const [deviceInfoLoading, setDeviceInfoLoading] = useState(false)
+  const [quickTestRunning, setQuickTestRunning] = useState(false)
 
   useEffect(() => {
     try {
@@ -43,6 +46,58 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
     } catch (error) {
       console.error('保存脚本路径失败:', error)
     }
+  }
+
+  const fetchDeviceInfo = async () => {
+    if (!selectedDevice) return
+    setDeviceInfoLoading(true)
+    try {
+      const info = await invoke<any>('get_device_info', { serial: selectedDevice })
+      // 额外获取屏幕配置信息（词典笔专用）
+      const [cfgOut, swOut] = await Promise.all([
+        invoke<CmdResult>('run_shell_command', { serial: selectedDevice, command: 'cat /etc/miniapp/resources/cfg.json' }),
+        invoke<CmdResult>('run_shell_command', { serial: selectedDevice, command: 'cat /sys/class/power_supply/battery/uevent | grep -E "POWER_SUPPLY_(VOLTAGE|TEMP|HEALTH|STATUS)"' }),
+      ])
+      setDeviceInfo({
+        ...info,
+        cfgJson: cfgOut?.success ? cfgOut.output : '获取失败',
+        batteryDetail: swOut?.success ? swOut.output : '获取失败',
+      })
+    } catch (e) {
+      console.error('获取设备信息失败:', e)
+    }
+    setDeviceInfoLoading(false)
+  }
+
+  const runDictpenQuickAction = async (action: string) => {
+    if (!selectedDevice) return
+    setQuickTestRunning(true)
+    const commands: Record<string, string> = {
+      'home': 'send_event asr press && sleep 0.2 && send_event asr release',
+      'statusbar': 'send_event touch slip 320 1 320 100',
+      'prevPage': 'send_event touch slip 20 86 620 86',
+      'nextPage': 'send_event touch slip 620 86 20 86',
+      'scan': 'send_event camera press && sleep 0.1 && send_event camera release',
+      'menu': 'send_event menu press && sleep 0.2 && send_event menu release',
+      'screenshot': 'miniapp_cli capture /tmp/dictpen_test.png',
+      'memUsage': 'miniapp_cli memoryApp',
+      'syslog': 'cat /data/syslog/messages | tail -30',
+      'checkSmoke': 'ps | grep smoke-test | grep -v grep && echo "---CYCLE---" && cat /data/smoke_test/cycle_count.txt 2>/dev/null && echo "---RESULTS---" && cat /data/smoke_test/results.txt 2>/dev/null || echo "未运行"',
+      'checkCrash': 'grep -i "crash\\|OOM\\|segfault\\|panic\\|ERROR" /data/syslog/messages | tail -20 || echo "无异常"',
+    }
+    const cmd = commands[action]
+    if (!cmd) return
+    try {
+      const r = await invoke<CmdResult>('run_shell_command', { serial: selectedDevice, command: cmd })
+      addLog(`[快捷操作:${action}] ${r?.success ? '完成' : '失败'}`)
+      if (r?.output) {
+        addLog(`[输出] ${r.output.substring(0, 300)}`)
+      }
+      showNotif(r?.success ? 'success' : 'error', `${action} ${r?.success ? '已执行' : '失败'}`)
+    } catch (e) {
+      addLog(`[快捷操作:${action}] 异常: ${e}`)
+    }
+    setQuickTestRunning(false)
   }
 
   const addLog = (msg: string) => {
@@ -226,7 +281,9 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
       const r = await invoke<CmdResult>('start_battery_log', { serial: selectedDevice })
       const status = r?.success ? 'success' : 'error'
       setActiveTests(prev => ({ ...prev, ['单电量记录']: { ...prev['单电量记录'], status, output: r?.output || r?.error || '' } }))
-      if (!r?.success) {
+      if (r?.success) {
+        showNotif('success', '电量记录已启动')
+      } else {
         showNotif('error', r?.error || '启动失败')
       }
       addLog(`[功耗] 电量记录: ${r?.success ? '已启动' : '失败 - ' + (r?.error || '')}`)
@@ -295,6 +352,88 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
   return (
     <div>
       <div className="section-title">测试套件</div>
+
+      {/* 词典笔设备信息 + 快捷操作 */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <FlaskConical size={14} /> 词典笔设备信息
+          <button className="btn btn-sm btn-secondary" onClick={fetchDeviceInfo} disabled={deviceInfoLoading}
+            style={{ marginLeft: 4, padding: '2px 8px', fontSize: 11 }}>
+            <RefreshCw size={11} className={deviceInfoLoading ? 'spinning' : ''} /> {deviceInfo ? '刷新' : '获取信息'}
+          </button>
+          {deviceInfo && <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>{deviceInfo.serial}</span>}
+        </div>
+
+        {deviceInfo ? (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 12 }}>
+              <div className="info-item"><span className="info-label">SKU</span><span className="info-value" style={{ fontFamily:'monospace',fontSize:11 }}>{deviceInfo.sku}</span></div>
+              <div className="info-item"><span className="info-label">版本</span><span className="info-value" style={{ fontFamily:'monospace',fontSize:11 }}>{deviceInfo.version?.substring(0,30)}</span></div>
+              <div className="info-item"><span className="info-label">分区</span><span className="info-value">{deviceInfo.partition?.substring(0,20) || '-'}</span></div>
+              <div className="info-item"><span className="info-label">Slot</span><span className="info-value">{deviceInfo.current_slot}</span></div>
+              <div className="info-item"><span className="info-label">电量</span><span className="info-value" style={{ color: parseInt(deviceInfo.battery) > 20 ? 'var(--accent-secondary)' : 'var(--accent-error)' }}>{deviceInfo.battery}</span></div>
+              <div className="info-item"><span className="info-label">内存使用</span><span className="info-value">{deviceInfo.memory_mb}%</span></div>
+              <div className="info-item"><span className="info-label">CPU</span><span className="info-value">{deviceInfo.cpu_usage}%</span></div>
+              <div className="info-item"><span className="info-label">IP</span><span className="info-value" style={{ fontFamily:'monospace',fontSize:11 }}>{deviceInfo.ip}</span></div>
+            </div>
+            {deviceInfo.cfgJson && (
+              <details style={{ marginBottom: 8 }}>
+                <summary style={{ fontSize: 11, color: 'var(--text-muted)', cursor: 'pointer' }}>屏幕配置 (cfg.json)</summary>
+                <pre style={{ fontSize: 10, color: 'var(--text-secondary)', maxHeight: 120, overflow: 'auto', marginTop: 4, background: 'rgba(0,0,0,0.2)', padding: 6, borderRadius: 4 }}>
+                  {deviceInfo.cfgJson}
+                </pre>
+              </details>
+            )}
+            {deviceInfo.batteryDetail && (
+              <details style={{ marginBottom: 8 }}>
+                <summary style={{ fontSize: 11, color: 'var(--text-muted)', cursor: 'pointer' }}>电池详情</summary>
+                <pre style={{ fontSize: 10, color: 'var(--text-secondary)', maxHeight: 100, overflow: 'auto', marginTop: 4, background: 'rgba(0,0,0,0.2)', padding: 6, borderRadius: 4 }}>
+                  {deviceInfo.batteryDetail}
+                </pre>
+              </details>
+            )}
+
+            {/* 快捷操作按钮 */}
+            <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: 10, marginTop: 4 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>词典笔快捷操作</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {[
+                  { key: 'home', label: '返回主页', icon: '🏠' },
+                  { key: 'statusbar', label: '下拉状态栏', icon: '📋' },
+                  { key: 'prevPage', label: '左滑(下一页)', icon: '👈' },
+                  { key: 'nextPage', label: '右滑(上一页)', icon: '👉' },
+                  { key: 'scan', label: '扫描(Camera键)', icon: '📷' },
+                  { key: 'menu', label: '菜单键', icon: '⚙️' },
+                  { key: 'screenshot', label: '截图', icon: '🖼️' },
+                  { key: 'memUsage', label: '内存用量', icon: '📊' },
+                  { key: 'syslog', label: '系统日志', icon: '📜' },
+                  { key: 'checkSmoke', label: 'Smoke状态', icon: '🔍' },
+                  { key: 'checkCrash', label: '崩溃检查', icon: '💥' },
+                ].map(item => (
+                  <button key={item.key} className="btn btn-sm btn-secondary"
+                    onClick={() => runDictpenQuickAction(item.key)}
+                    disabled={quickTestRunning}
+                    style={{ padding: '3px 8px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 3 }}>
+                    <span>{item.icon}</span> {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        ) : (
+          !deviceInfoLoading && (
+            <div style={{ padding: 12, color: 'var(--text-muted)', fontSize: 12, textAlign: 'center' }}>
+              点击「获取信息」查看设备详细参数和快捷操作
+            </div>
+          )
+        )}
+
+        {deviceInfoLoading && (
+          <div className="loading-container" style={{ padding: 20 }}>
+            <div className="spinner" /> 正在获取设备信息...
+          </div>
+        )}
+      </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="card-title"><FolderOpen size={14} /> 脚本选择（运行时自动推送）</div>

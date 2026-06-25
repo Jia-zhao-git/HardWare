@@ -3,6 +3,19 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+
+/**
+ * 清洗设备 SN：去除 ADB 在前面附加的 USB 端口/集线器编号（纯数字前缀）
+ * 例：00187G50900011900015 → 7G50900011900015
+ *     000000197G50900011900015 → 7G50900011900015
+ *     7G50900011900015 → 7G50900011900015（无变化）
+ */
+function cleanDeviceSerial(raw) {
+    if (!raw) return raw;
+    // 找第一个 "数字后紧接字母" 的位置 → 这是真实 SN 的起点
+    const m = raw.match(/\d(?=[A-Za-z])/);
+    return m ? raw.substring(m.index) : raw;
+}
 const { getState } = require('./context');
 
 const AUTH_KEYS = [
@@ -42,7 +55,7 @@ function runAdbShell(device, cmd, timeoutMs = 30000) {
 
 async function check_adb_available(event, data) {
     const r = await runAdb(['version']);
-    return { success: r.success, output: r.output.split('\n')[0] || '', error: r.error };
+    return { success: r.success, output: r.output.split('\n','\r')[0] || '', error: r.error };
 }
 
 async function get_devices(event, data) {
@@ -51,9 +64,15 @@ async function get_devices(event, data) {
     if (r.success) {
         const lines = r.output.split('\n').slice(1);
         for (const line of lines) {
-            const parts = line.trim().split('\t');
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            const parts = trimmed.split('\t');
             if (parts.length >= 2 && (parts[1] === 'device' || parts[1] === 'offline' || parts[1] === 'unauthorized')) {
-                devices.push({ serial: parts[0], state: parts[1] });
+                const serial = parts[0].trim();
+                // 过滤传输层 ID（包含冒号）和空 serial
+                if (serial && !serial.includes(':') && serial.length > 0) {
+                    devices.push({ serial, state: parts[1] });
+                }
             }
         }
     }
@@ -69,30 +88,9 @@ async function get_devices(event, data) {
 }
 
 async function authenticate_device(event, { serial }) {
-    if (authenticatedDevices.has(serial)) {
-        return { success: true, message: '设备已认证（缓存）', key_index: null, cached: true };
-    }
-    const r = await runAdbShell(serial, 'id');
-    if (r.success && (r.output.includes('uid=') || r.output.includes('root'))) {
-        authenticatedDevices.add(serial);
-        return { success: true, message: '设备已认证', key_index: null, cached: false };
-    }
-    for (let i = 0; i < AUTH_KEYS.length; i++) {
-        const key = AUTH_KEYS[i];
-        const child = spawn('adb', ['-s', serial, 'shell', 'auth'], { windowsHide: true });
-        await new Promise(resolve => {
-            child.stdin.write(key + '\n');
-            child.stdin.end();
-            setTimeout(resolve, 600);
-            setTimeout(() => { try { child.kill(); } catch {} }, 1000);
-        });
-        const check = await runAdbShell(serial, 'id');
-        if (check.success && (check.output.includes('uid=') || check.output.includes('root'))) {
-            authenticatedDevices.add(serial);
-            return { success: true, message: '认证成功', key_index: i + 1, cached: false };
-        }
-    }
-    return { success: false, message: '认证失败，所有密钥均不匹配', key_index: null, cached: false };
+    // 代理到 auth.js 的实现（避免重复定义）
+    const auth = require('./auth');
+    return auth.authenticate_device(event, { serial });
 }
 
 async function run_shell_command(event, { serial, command, timeout }) {
@@ -197,7 +195,21 @@ async function get_device_logs(event, { serial, logPath }) {
 async function get_device_info(event, { serial }) {
     const adbShell = (cmd) => runAdbShell(serial, cmd);
     
-    // 并行执行所有独立查询（从备份项目移植）
+    // 先用 adb devices -l 获取真实 serial（映射 USB 层 ID → 真实 serial）
+    let realSerial = serial;
+    const devList = await runAdb(['devices', '-l']);
+    if (devList.success) {
+        const lines = devList.output.split('\n').slice(1);
+        for (const line of lines) {
+            const m = line.trim().match(/^(\S+)\s+device\s/);
+            if (m && m[1]) {
+                realSerial = m[1];
+                break; // 取第一个在线设备
+            }
+        }
+    }
+    
+    // 并行执行所有独立查询
     const [skuOut, verOut, partOut, slotOut, batOut, memOut, cpuOut, ipOut] = await Promise.all([
         adbShell('cat /data/cfg/sys_config.conf'),  // SKU
         adbShell('cat /Version'),                    // Version
@@ -213,9 +225,9 @@ async function get_device_info(event, { serial }) {
     const skuRe = /^\s*sku\s*=\s*(\S+)/m;
     const sku = skuRe.exec(skuOut.output)?.[1] || '未知SKU';
     
-    const version = verOut.success && verOut.output ? verOut.output : '未知版本';
+    const version = verOut.success && verOut.output ? verOut.output.trim() : '未知版本';
     
-    const partition = partOut.success && partOut.output ? partOut.output.replace('[ota_info]', '') : '未知';
+    const partition = partOut.success && partOut.output ? partOut.output.trim().replace('[ota_info]', '') : '未知';
     
     const slotMatch = /SLOT=['"]?([_][ab])/.exec(slotOut.output);
     const current_slot = slotMatch ? (slotMatch[1] === '_a' ? 'A' : 'B') : '未知';
@@ -243,7 +255,7 @@ async function get_device_info(event, { serial }) {
     const ipRe = /inet (\d+\.\d+\.\d+\.\d+)/;
     const ip = ipRe.exec(ipOut.output)?.[1] || '未知';
     
-    return { serial, sku, version, partition, current_slot, battery, memory_mb, cpu_usage, ip };
+    return { serial: realSerial, sku, version, partition, current_slot, battery, memory_mb, cpu_usage, ip };
 }
 
 async function keep_screen_on(event, { serial, enable }) {
@@ -413,5 +425,5 @@ module.exports = {
     log_redirect, read_file_base64, get_device_logs, get_device_info,
     keep_screen_on, check_adb_debug_status, keep_adb_debug,
     wifi_connect, wifi_disconnect, wifi_scan, get_performance_monitor,
-    runAdb, runAdbShell,
+    runAdb, runAdbShell, cleanDeviceSerial,
 };

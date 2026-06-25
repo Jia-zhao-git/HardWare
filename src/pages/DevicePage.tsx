@@ -3,7 +3,7 @@ import { invoke, CmdResult, AdbDevice, DeviceInfo, authAutoStopIPC, AuthState } 
 import {
   Smartphone, Battery, Cpu, MemoryStick, Wifi, HardDrive, RefreshCw,
   CheckCircle, AlertTriangle, XCircle, Info, Tag, Calendar, Factory, Copy, Check,
-  Camera, FileText, RotateCcw, Zap
+  Camera, FileText, RotateCcw, Zap,
 } from 'lucide-react'
 import { getDeviceBySku } from '../config/deviceConfig'
 
@@ -28,6 +28,7 @@ export default function DevicePage({
   const [extracting, setExtracting] = useState(false)
   const [rebooting, setRebooting] = useState(false)
   const [enteringFastboot, setEnteringFastboot] = useState(false)
+  const [factoryResetting, setFactoryResetting] = useState(false)
   const [usbDebugOn, setUsbDebugOn] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [specsExpanded, setSpecsExpanded] = useState(false) // 设备规格折叠状态，默认折叠
@@ -88,7 +89,8 @@ export default function DevicePage({
 
   const copyToClipboard = async (text: string, field: string) => {
     try {
-      await navigator.clipboard.writeText(text)
+      const cleanText = text.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+      await navigator.clipboard.writeText(cleanText)
       setCopiedField(field)
       setTimeout(() => setCopiedField(null), 2000)
       showNotif('success', `已复制: ${text}`)
@@ -146,6 +148,17 @@ export default function DevicePage({
       showNotif(r?.success ? 'success' : 'error', r?.success ? '设备正在进入刷机模式...' : r?.error || '进入刷机模式失败')
     } catch (e) { showNotif('error', String(e)) }
     setEnteringFastboot(false)
+  }
+
+  const doFactoryReset = async () => {
+    if (!selectedDevice) return
+    if (!confirm('确定要恢复出厂设置吗？设备将重启并清除所有数据。')) return
+    setFactoryResetting(true)
+    try {
+      const r = await invoke<CmdResult>('factory_reset', { serial: selectedDevice })
+      showNotif(r?.success ? 'success' : 'error', r?.success ? '设备正在进入恢复模式...' : r?.error || '恢复出厂失败')
+    } catch (e) { showNotif('error', String(e)) }
+    setFactoryResetting(false)
   }
 
   const toggleUsbDebug = async () => {
@@ -369,6 +382,10 @@ export default function DevicePage({
               <button className="action-btn warning" onClick={rebootDevice} disabled={rebooting}>
                 <RotateCcw size={14} />
                 <span>{rebooting ? '重启中' : '重启'}</span>
+              </button>
+              <button className="action-btn danger" onClick={doFactoryReset} disabled={factoryResetting}>
+                <Factory size={14} />
+                <span>{factoryResetting ? '恢复中' : '恢复出厂'}</span>
               </button>
               <button className="action-btn danger" onClick={enterFastboot} disabled={enteringFastboot}>
                 <Zap size={14} />

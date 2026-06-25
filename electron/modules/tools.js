@@ -117,10 +117,31 @@ async function query_app_versions(event, { serial }) {
     return [];
 }
 
+async function factory_reset(event, { serial }) {
+    try {
+        // 停止守护进程
+        await runAdbShell(serial, 'killall -9 guardian_run');
+        await runAdbShell(serial, 'killall -9 miniapp');
+        // 执行恢复出厂
+        const fc = await runAdbShell(serial, 'factory_and_clear');
+        if (!fc.success) return { success: false, output: fc.output, error: 'factory_and_clear 失败: ' + (fc.error || fc.output) };
+        // 写入恢复命令
+        await runAdbShell(serial, 'mkdir -p /userdata/recovery');
+        const cmd = await runAdbShell(serial, 'echo -n \'--wipe_all\' > /userdata/recovery/command');
+        if (!cmd.success) return { success: false, output: cmd.output, error: '写入恢复命令失败: ' + (cmd.error || cmd.output) };
+        await runAdbShell(serial, 'sync');
+        await runAdb(['reboot', 'recovery'], serial, 10000);
+        return { success: true, output: '设备正在进入恢复模式...', error: null };
+    } catch (e) {
+        return { success: false, output: '', error: e.message || String(e) };
+    }
+}
+
 module.exports = {
     screenshot,
     firmware_check,
     install_apk,
     install_amr,
     query_app_versions,
+    factory_reset,
 };

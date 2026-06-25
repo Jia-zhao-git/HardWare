@@ -272,6 +272,23 @@ export const deviceConfig = [
     }
   },
   {
+    name: '词典笔Y18',
+    category: 'pen',
+    image: 'https://ydschool-video.nosdn.127.net/17725259505958.png',
+    skuPatterns: ['OVERHEAD_Y18_SKU', 'Y18_SKU'],
+    specs: {
+      sku: 'OVERHEAD_Y18_SKU_CHN_PLUS',
+      codeName: 'Y18',
+      cpu: 'CV1813',
+      storage: '64GB',
+      ram: '512MB',
+      display: '4.1英寸280*936',
+      battery: '1020mAh',
+      wifi: '恒玄 BES2600',
+	  manufacturer: '麦度',
+    }
+  },
+  {
     name: '词典笔X7P长续航版',
     category: 'pen',
     image: 'https://ydschool-video.nosdn.127.net/17725259505958.png',

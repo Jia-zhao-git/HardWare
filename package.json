@@ -1,6 +1,6 @@
 {
   "name": "adb-tools-v1",
-  "version": "1.0.0",
+  "version": "3.3.3",
   "private": true,
   "main": "electron/main.js",
   "productName": "智能硬件",
@@ -31,11 +31,13 @@
     "cross-env": "^10.1.0",
     "electron": "^33.4.11",
     "electron-builder": "^25.1.8",
+    "sharp": "^0.35.2",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
     "wait-on": "^9.0.5"
   },
   "build": {
+    "icon": "build/icon.png",
     "appId": "com.adbtools.v1",
     "productName": "智能硬件",
     "asar": true,
@@ -46,13 +48,16 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "build/**/*",
       "package.json"
     ],
     "win": {
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "artifactName": "${productName}-${version}-portable.${ext}"

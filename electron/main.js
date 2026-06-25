@@ -1,6 +1,6 @@
 // electron/main.js - Modular router (~250 lines)
 
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -19,6 +19,7 @@ const scripts = require('./modules/scripts');
 const stability = require('./modules/stability');
 const tools = require('./modules/tools');
 const window = require('./modules/window');
+const update = require('./modules/update');
 
 // ============================================================================
 // Shared state
@@ -62,6 +63,7 @@ function createWindow() {
         },
         frame: false,
         show: false,
+        icon: path.join(__dirname, '../build/icon.png'),
     });
 
     mainWindow.once('ready-to-show', () => mainWindow.show());
@@ -168,6 +170,7 @@ function registerToolHandlers() {
     if (tools.install_apk) ipcMain.handle('install_apk', tools.install_apk);
     if (tools.install_amr) ipcMain.handle('install_amr', tools.install_amr);
     if (tools.query_app_versions) ipcMain.handle('query_app_versions', tools.query_app_versions);
+    if (tools.factory_reset) ipcMain.handle('factory_reset', tools.factory_reset);
 }
 
 // ============================================================================
@@ -207,6 +210,16 @@ function registerStabilityHandlers() {
 // ============================================================================
 function registerMiscHandlers() {
     if (misc.collect_battery_log) ipcMain.handle('collect_battery_log', misc.collect_battery_log);
+    // copy_to_clipboard
+    ipcMain.handle('copy_to_clipboard', async (_event, { text }) => {
+        try {
+            clipboard.writeText(text);
+            return { success: true };
+        } catch (e) {
+            console.error('[copy_to_clipboard] error:', e.message);
+            return { success: false, error: e.message };
+        }
+    });
     // open_file_location: 在Windows资源管理器中打开文件/目录
     ipcMain.handle('open_file_location', async (_event, { filePath }) => {
         try {
@@ -298,10 +311,14 @@ app.whenReady().then(() => {
 
     // Start track-devices
     if (adb.startTrackDevices) adb.startTrackDevices();
+
+    // Start version check (initial + periodic)
+    if (update.startPeriodicCheck) update.startPeriodicCheck(mainWindow);
 });
 
 app.on('window-all-closed', () => {
     try { if (adb.stopTrackDevices) adb.stopTrackDevices(); } catch {}
+    try { if (update.stopPeriodicCheck) update.stopPeriodicCheck(); } catch {}
     if (process.platform !== 'darwin') app.quit();
 });
 

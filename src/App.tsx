@@ -3,7 +3,7 @@ import { invoke, AdbDevice, DeviceInfo, PerformanceData, CmdResult, authStateSub
 import { 
   Terminal, Package, FileCode, FlaskConical, Wrench, 
   RefreshCw, Palette, FolderOpen, Zap, Battery, Cpu, MemoryStick, 
-  Activity, Clock, Smartphone, Wifi, Minus, Square, X, History
+  Activity, Clock, Smartphone, Wifi, Minus, Square, X, History, Copy, Check
 } from 'lucide-react'
 
 import DevicePage from './pages/DevicePage'
@@ -73,11 +73,45 @@ function App() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [connectedDeviceInfo, setConnectedDeviceInfo] = useState<DeviceInfo | null>(null)
   const [authState, setAuthState] = useState<AuthState | null>(null)
+  const [infoCopied, setInfoCopied] = useState(false)
+
+  const showNotifRef = useRef<(type: string, text: string) => void>(() => {})
 
   const showNotif = useCallback((type: string, text: string) => {
     setNotif({ type, text })
     setTimeout(() => setNotif(null), 3000)
   }, [])
+  showNotifRef.current = showNotif
+
+  const copyDeviceInfo = useCallback(() => {
+    if (!deviceInfo) return
+    const lines = [
+      `设备序列号: ${deviceInfo.serial}`,
+      `SKU: ${deviceInfo.sku || '-'}`,
+      `版本: ${deviceInfo.version || '-'}`,
+      `分区: ${deviceInfo.partition || '-'}`,
+      `当前槽位: ${deviceInfo.current_slot || '-'}`,
+      `电池: ${deviceInfo.battery || '-'}`,
+      `内存: ${deviceInfo.memory_mb || '-'}%`,
+      `IP: ${deviceInfo.ip || '-'}`,
+    ]
+    const text = lines.join('\n')
+    console.log('[copyDeviceInfo] copying:', text.substring(0, 50))
+    setInfoCopied(true)
+    setTimeout(() => setInfoCopied(false), 2000)
+    invoke<{ success: boolean }>('copy_to_clipboard', { text }).then(r => {
+      console.log('[copyDeviceInfo] result:', r)
+      if (r?.success) {
+        showNotifRef.current('success', '设备信息已复制到剪贴板')
+      } else {
+        showNotifRef.current('error', '复制失败')
+      }
+    }).catch(e => {
+      console.error('[copyDeviceInfo] error:', e)
+      navigator.clipboard.writeText(text).catch(() => {})
+      showNotifRef.current('success', '设备信息已复制到剪贴板')
+    })
+  }, [deviceInfo])
 
   // 用 ref 避免 auth callback 依赖问题
   const refreshDeviceInfoRef = useRef<() => void>(() => {})
@@ -249,7 +283,13 @@ function App() {
     // track-devices 实时监听作为主要推送，3秒轮询作为心跳兜底（更快响应）
     // 窗口切回时立即刷新以获取最新状态
     const interval = setInterval(refreshDevices, 3000)
-    const onVisible = () => { if (document.visibilityState === 'visible') refreshDevices() }
+    const onVisible = () => { 
+      if (document.visibilityState === 'visible') { 
+        // 清理已处理记录，确保后台回来后能重新触发认证
+        trackHandledRef.current.clear(); 
+        refreshDevices(); 
+      } 
+    }
     document.addEventListener('visibilitychange', onVisible)
     return () => {
       clearInterval(interval)
@@ -406,6 +446,15 @@ function App() {
                   </div>
                 )}
                 <div className="header-sep" />
+                <button
+                  className="header-stat"
+                  onClick={copyDeviceInfo}
+                  title="复制设备信息"
+                  style={{ cursor: 'pointer', background: 'none', border: 'none', gap: 4, ...( { WebkitAppRegion: 'no-drag' } as React.CSSProperties ) }}
+                >
+                  {infoCopied ? <Check size={12} style={{ color: 'var(--accent-secondary)' }} /> : <Copy size={12} style={{ color: 'var(--text-muted)' }} />}
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{infoCopied ? '已复制' : '复制信息'}</span>
+                </button>
               </div>
             )}
             <div className={`connection-status ${connectedCount > 0 ? 'online' : 'offline'}`}>

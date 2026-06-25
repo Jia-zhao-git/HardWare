@@ -16,7 +16,7 @@ interface FileItem {
 }
 
 export default function FileManagerPage({ selectedDevice, showNotif }: Props) {
-  const [currentPath, setCurrentPath] = useState('/data')
+  const [currentPath, setCurrentPath] = useState('/userdata')
   const [files, setFiles] = useState<FileItem[]>([])
   const [loading, setLoading] = useState(false)
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
@@ -26,7 +26,7 @@ export default function FileManagerPage({ selectedDevice, showNotif }: Props) {
   const [previewName, setPreviewName] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
 
-  const pathHistory = useRef<string[]>(['/data'])
+  const pathHistory = useRef<string[]>(['/userdata'])
   const historyIndex = useRef(0)
 
   const listFiles = useCallback(async (path: string) => {
