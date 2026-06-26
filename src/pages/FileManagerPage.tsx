@@ -24,7 +24,8 @@ export default function FileManagerPage({ selectedDevice, showNotif }: Props) {
   const [showHidden, setShowHidden] = useState(false)
   const [previewContent, setPreviewContent] = useState<string | null>(null)
   const [previewName, setPreviewName] = useState('')
-  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [exporting, setExporting] = useState(false)
 
   const pathHistory = useRef<string[]>(['/userdata'])
   const historyIndex = useRef(0)
@@ -144,6 +145,7 @@ export default function FileManagerPage({ selectedDevice, showNotif }: Props) {
       remotePath: `${currentPath}/${filename}`,
       localPath
     })
+    console.log('[doPullFile]', { filename, localPath, r })
     return !!r?.success
   }
 
@@ -159,6 +161,9 @@ export default function FileManagerPage({ selectedDevice, showNotif }: Props) {
   }
 
   const exportSelected = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
     if (selectedItems.size === 0) return
     const fileList: { name: string; type: string }[] = []
     for (const name of selectedItems) {
@@ -182,6 +187,9 @@ export default function FileManagerPage({ selectedDevice, showNotif }: Props) {
       if (r) ok++
     }
     showNotif(ok > 0 ? 'success' : 'error', ok > 0 ? `已导出 ${ok}/${fileList.length} 个文件到: ${dir}` : '导出失败')
+  } finally {
+    setExporting(false);
+  }
   }
 
   const pushFile = async () => {
@@ -303,7 +311,7 @@ export default function FileManagerPage({ selectedDevice, showNotif }: Props) {
 
         <button className="btn btn-secondary" onClick={pushFile}><Upload size={12} /> 上传</button>
         <button className="btn btn-secondary" onClick={createFolder}><Plus size={12} /> 新建</button>
-        <button className="btn btn-secondary" onClick={exportSelected} disabled={selectedItems.size === 0}><FolderOpen size={12} /> 导出 ({selectedItems.size || 0})</button>
+        <button className="btn btn-secondary" onClick={exportSelected} disabled={selectedItems.size === 0 || exporting}><FolderOpen size={12} /> 导出 ({selectedItems.size || 0})</button>
         {selectedItems.size > 0 && (
           <button className="btn btn-danger" onClick={deleteSelected}><Trash2 size={12} /> 删除 ({selectedItems.size})</button>
         )}

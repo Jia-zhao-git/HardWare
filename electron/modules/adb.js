@@ -157,8 +157,48 @@ async function push_script(event, { serial, localPath, remotePath }) {
     return await runAdb(['push', localPath, remotePath], serial, 30000);
 }
 
+let _pullLock = false;
 async function pull_file(event, { serial, remotePath, localPath }) {
-    return await runAdb(['pull', remotePath, localPath], serial, 60000);
+    while (_pullLock) await new Promise(r => setTimeout(r, 200));
+    _pullLock = true;
+    try {
+        const fs2 = require("fs");
+        const path2 = require("path");
+        const os = require("os");
+        const { spawn } = require("child_process");
+        const dir = path2.dirname(localPath);
+        const filename = path2.basename(localPath);
+        try { fs2.mkdirSync(dir, { recursive: true }); } catch(e) { /* dir may already exist (e.g. drive root) */ }
+        const tmpFile = path2.join(os.tmpdir(), "adb_pull_" + Date.now() + "_" + filename);
+        const androidPath = remotePath.startsWith("/") ? remotePath : "/" + remotePath;
+        return new Promise((resolve) => {
+            const proc = spawn("adb", ["-s", serial, "pull", androidPath, tmpFile], { windowsHide: true });
+            let stderr = "";
+            proc.stderr.on("data", (d) => { stderr += d.toString(); });
+            proc.on("close", (code) => {
+                if (code === 0 && fs2.existsSync(tmpFile)) {
+                    try {
+                        fs2.renameSync(tmpFile, localPath);
+                        resolve({ success: true, output: "saved to " + localPath });
+                    } catch(renameErr) {
+                        try {
+                            fs2.copyFileSync(tmpFile, localPath);
+                            fs2.unlinkSync(tmpFile);
+                            resolve({ success: true, output: "copied to " + localPath });
+                        } catch(copyErr) {
+                            fs2.unlinkSync(tmpFile);
+                            resolve({ success: false, output: "rename/copy failed: " + copyErr.message, error: copyErr.message });
+                        }
+                    }
+                } else {
+                    if (fs2.existsSync(tmpFile)) fs2.unlinkSync(tmpFile);
+                    resolve({ success: false, output: "adb exit " + code + ": " + stderr });
+                }
+            });
+        });
+    } finally {
+        _pullLock = false;
+    }
 }
 
 async function log_redirect(event, { serial }) {
