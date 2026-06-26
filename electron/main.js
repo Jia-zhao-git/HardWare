@@ -116,6 +116,7 @@ function registerADBHandlers() {
     if (adb.wifi_disconnect) ipcMain.handle('wifi_disconnect', adb.wifi_disconnect);
     if (adb.extract_logs) ipcMain.handle('extract_logs', adb.extract_logs);
     if (adb.push_script) ipcMain.handle('push_script', adb.push_script);
+    if (adb.pull_file) ipcMain.handle('pull_file', adb.pull_file);
     if (adb.log_redirect) ipcMain.handle('log_redirect', adb.log_redirect);
     if (adb.read_file_base64) ipcMain.handle('read_file_base64', adb.read_file_base64);
     if (adb.get_device_logs) ipcMain.handle('get_device_logs', adb.get_device_logs);

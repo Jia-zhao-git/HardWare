@@ -157,6 +157,10 @@ async function push_script(event, { serial, localPath, remotePath }) {
     return await runAdb(['push', localPath, remotePath], serial, 30000);
 }
 
+async function pull_file(event, { serial, remotePath, localPath }) {
+    return await runAdb(['pull', remotePath, localPath], serial, 60000);
+}
+
 async function log_redirect(event, { serial }) {
     const cmds = [
         "mount -o remount,rw /",
@@ -421,7 +425,7 @@ ps w | grep -E 'miniapp|SoundPlayer|CaptureFrame|SoundRecord' | grep -v grep | g
 module.exports = {
     check_adb_available, get_devices, authenticate_device, run_shell_command,
     reboot_recovery, storage_get_space, storage_fill_start, storage_fill_clean,
-    reboot_device, enter_fastboot, extract_logs, push_file_to_device, push_script,
+    reboot_device, enter_fastboot, extract_logs, push_file_to_device, push_script, pull_file,
     log_redirect, read_file_base64, get_device_logs, get_device_info,
     keep_screen_on, check_adb_debug_status, keep_adb_debug,
     wifi_connect, wifi_disconnect, wifi_scan, get_performance_monitor,

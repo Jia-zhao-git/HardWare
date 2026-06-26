@@ -144,9 +144,10 @@ export default function FileManagerPage({ selectedDevice, showNotif }: Props) {
       filters: [{ name: 'All Files', extensions: ['*'] }]
     })
     if (!savePath) return null
-    const r = await invoke<CmdResult>('run_shell_command', {
+    const r = await invoke<CmdResult>('pull_file', {
       serial: selectedDevice,
-      command: `adb pull "${currentPath}/${filename}" "${savePath}"`
+      remotePath: `${currentPath}/${filename}`,
+      localPath: savePath
     })
     if (r?.success) { showNotif('success', `文件已下载: ${savePath}`); return savePath }
     showNotif('error', `下载失败: ${r?.error}`); return null
