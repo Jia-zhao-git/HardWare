@@ -203,6 +203,7 @@ function registerStabilityHandlers() {
     if (stability.collect_stability_results) ipcMain.handle('collect_stability_results', stability.collect_stability_results);
     if (stability.start_log_stream) ipcMain.handle('start_log_stream', stability.start_log_stream);
     if (stability.stop_log_stream) ipcMain.handle('stop_log_stream', stability.stop_log_stream);
+    if (stability.redirect_logs) ipcMain.handle('redirect_logs', stability.redirect_logs);
 }
 
 // ============================================================================

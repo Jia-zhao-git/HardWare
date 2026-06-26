@@ -1,0 +1,43 @@
+name: Build & Release
+
+# 触发条件：推送到 main/develop 分支，或手动触发
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # 1. 检出代码
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. 安装 Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      # 3. 安装依赖
+      - name: Install dependencies
+        run: npm ci
+
+      # 4. 构建 + 打包
+      - name: Build & Package
+        run: npm run dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 5. 上传产物（所有平台包都保留）
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: 智能硬件-${{ runner.os }}-${{ runner.arch }}
+          path: release/*
+          retention-days: 30

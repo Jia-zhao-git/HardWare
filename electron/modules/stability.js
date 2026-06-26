@@ -7,8 +7,9 @@ const { runAdb, runAdbShell } = require('./adb');
 const { calculateDuration } = require('./misc');
 const { getState } = require('./context');
 
-async function start_stability_test(event, { serial, testType }) {
+async function start_stability_test(event, { serial, testType, scriptName }) {
     const adbPath = getState().adbPath || 'adb';
+    const script = scriptName || 'monkey.sh';
     return new Promise((resolve) => {
         const proc = spawn(adbPath, ['-s', serial, 'shell'], { windowsHide: true });
         proc.stdout.on('data', (d) => {
@@ -37,19 +38,23 @@ async function start_stability_test(event, { serial, testType }) {
         // cd 到 /data/ 目录
         proc.stdin.write('cd /data/\n');
         // chmod 赋权
-        proc.stdin.write('chmod +x monkey.sh\n');
+        proc.stdin.write('chmod +x ' + script + '\n');
         proc.stdin.write('chmod +x grafana.sh\n');
+        // 先杀掉已有的 monkey 进程
+        proc.stdin.write('killall -9 monkey 2>/dev/null; killall -9 monkey.sh 2>/dev/null; killall -9 guardian_run 2>/dev/null\n');
         // 始终先启动 grafana.sh 监控（sh 方式执行）
         proc.stdin.write('nohup sh grafana.sh > /dev/null 2>&1 &\n');
-        // 根据 testType 启动 monkey.sh（sh 方式执行）
+        // 根据 testType 启动对应脚本（sh 方式执行）
         if (testType === 'scan') {
-            proc.stdin.write('nohup sh monkey.sh ocr > /dev/null 2>&1 &\n');
+            proc.stdin.write('nohup sh ' + script + ' ocr > /dev/null 2>&1 &\n');
         } else if (testType === 'random') {
-            proc.stdin.write('nohup sh monkey.sh > /dev/null 2>&1 &\n');
+            proc.stdin.write('nohup sh ' + script + ' > /dev/null 2>&1 &\n');
+        } else if (testType === 'ocrcc') {
+            proc.stdin.write('nohup sh ' + script + ' ocrcc > /dev/null 2>&1 &\n');
         } else if (testType === 'mem') {
             // 内存记录：只启动 grafana 监控，不运行 monkey
         } else {
-            proc.stdin.write('nohup sh monkey.sh > /dev/null 2>&1 &\n');
+            proc.stdin.write('nohup sh ' + script + ' > /dev/null 2>&1 &\n');
         }
         proc.stdin.write('exit\n');
         resolve({ success: true, output: `已启动${testType}测试 (后台运行)`, error: null });
@@ -353,6 +358,68 @@ async function start_log_stream(event, { serial, logType }) {
     });
 }
 
+async function redirect_logs(event, { serial }) {
+    const adbPath = getState().adbPath || 'adb';
+    return new Promise((resolve) => {
+        const proc = spawn(adbPath, ['-s', serial, 'shell'], { windowsHide: true });
+        let output = '';
+        const capture = (d) => { output += d.toString(); };
+        proc.stdout.on('data', capture);
+        proc.stderr.on('data', capture);
+        proc.on('close', async (code) => {
+            if (code !== 0) {
+                resolve({ success: false, output: output.trim(), error: `退出码 ${code}` });
+                return;
+            }
+            // 等待10秒后执行最后步骤
+            await new Promise(r => setTimeout(r, 10000));
+            const finalProc = spawn(adbPath, ['-s', serial, 'shell'], { windowsHide: true });
+            let finalOut = '';
+            finalProc.stdout.on('data', (d) => { finalOut += d.toString(); });
+            finalProc.stderr.on('data', (d) => { finalOut += d.toString(); });
+            finalProc.on('close', (c) => {
+                resolve({
+                    success: c === 0,
+                    output: output + '\n--- 等待10秒后 ---\n' + finalOut,
+                    error: c !== 0 ? `最终步骤退出码 ${c}` : null
+                });
+            });
+            // 执行最终清理步骤
+            finalProc.stdin.write('killall -9 guardian_run\n');
+            finalProc.stdin.write('killall -9 input-event-daemon\n');
+            finalProc.stdin.write('/etc/init.d/S22syslogd restart\n');
+            finalProc.stdin.write('exit\n');
+        });
+        proc.on('error', (e) => {
+            resolve({ success: false, output: '', error: e.message });
+        });
+        // 执行日志重定向步骤
+        proc.stdin.write('mount -o remount,rw /\n');
+        proc.stdin.write('mkdir -p /userdisk/applog\n');
+        proc.stdin.write('sed -i \'s|-O /userdata/syslog/messages|-O /userdisk/applog/messages|g; s|-s 1200|-s 20480|g; s|-l 7|-l 8|g\' /etc/init.d/S22syslogd\n');
+        proc.stdin.write('sed -i \'s|/userdata/syslog/|/userdisk/applog/|g\' /etc/syslog.conf\n');
+        proc.stdin.write('sed -i \'s|/userdata/applog/|/userdisk/applog/|g\' /usr/bin/runCapFrame\n');
+        proc.stdin.write('sed -i \'s|/userdata/applog/|/userdisk/applog/|g\' /usr/bin/runDictPen\n');
+        proc.stdin.write('sed -i \'s|/data/applog/|/userdisk/applog/|g\' /usr/bin/runSoundPlayer\n');
+        proc.stdin.write('sed -i \'s|/data/applog/|/userdisk/applog/|g\' /usr/bin/runSoundRecord\n');
+        proc.stdin.write('sed -i \'s|\\*.WARN|*.*|g\' /oem/YoudaoDictPen/output/configs/zlog_miniapp.conf\n');
+        proc.stdin.write('sed -i \'s|\\*.WARN|*.*|g\' /oem/YoudaoDictPen/output/configs/zlog_resourcemanager.conf\n');
+        proc.stdin.write('sed -i \'s|\\*.WARN|*.*|g\' /oem/YoudaoDictPen/output/configs/zlog_soundplayer.conf\n');
+        proc.stdin.write('sed -i \'s|\\*.WARN|*.*|g\' /oem/YoudaoDictPen/output/configs/zlog_soundrecord.conf\n');
+        proc.stdin.write('sed -i \'s|save_core=0|save_core=1|g\' /data/cfg/debug.cfg\n');
+        proc.stdin.write('chmod 755 /etc/init.d/S22syslogd\n');
+        proc.stdin.write('chmod 755 /usr/bin/runCapFrame\n');
+        proc.stdin.write('chmod 755 /usr/bin/runDictPen\n');
+        proc.stdin.write('chmod 755 /usr/bin/runSoundPlayer\n');
+        proc.stdin.write('chmod 755 /usr/bin/runSoundRecord\n');
+        proc.stdin.write('killall -9 miniapp\n');
+        proc.stdin.write('killall -9 SoundPlayer\n');
+        proc.stdin.write('killall -9 SoundRecord\n');
+        proc.stdin.write('killall -9 CaptureFrame\n');
+        proc.stdin.write('exit\n');
+    });
+}
+
 async function stop_log_stream(event, { serial }) {
     const r = await runAdbShell(serial, 'pkill -9 logcat');
     return { success: r.success, output: '已停止日志流', error: r.error };
@@ -373,6 +440,7 @@ module.exports = {
     collect_stability_results,
     start_log_stream,
     stop_log_stream,
+    redirect_logs,
 };
 
 

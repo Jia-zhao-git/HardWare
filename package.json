@@ -3,7 +3,7 @@
   "version": "3.3.3",
   "private": true,
   "main": "electron/main.js",
-  "productName": "智能硬件",
+  "productName": "HardWare_TestTools",
   "description": "智能硬件 ADB 调试工具",
   "author": "zhaojia08",
   "scripts": {
@@ -39,7 +39,7 @@
   "build": {
     "icon": "build/icon.png",
     "appId": "com.adbtools.v1",
-    "productName": "智能硬件",
+    "productName": "HardWare_TestTools",
     "asar": true,
     "compression": "maximum",
     "directories": {
@@ -51,19 +51,40 @@
       "build/**/*",
       "package.json"
     ],
+    "artifactName": "${productName}_${version}.${ext}",
     "win": {
       "target": [
         {
           "target": "portable",
-          "arch": [
-            "x64"
-          ]
+          "arch": ["x64"]
         }
-      ],
-      "artifactName": "${productName}-${version}-portable.${ext}"
+      ]
     },
-    "portable": {
-      "artifactName": "${productName}-${version}.${ext}"
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["x64", "arm64"]
+        }
+      ]
+    },
+    "linux": {
+      "category": "Development",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        },
+        {
+          "target": "deb",
+          "arch": ["x64"]
+        }
+      ]
     },
     "publish": null
   }

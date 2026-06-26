@@ -117,9 +117,10 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
     if (!scriptPaths.monkey && !scriptPaths.grafana) { showNotif('warning', '请先选择 monkey 或 grafana 脚本'); return false }
     addLog('[推送] 开始推送稳定性脚本...')
     if (scriptPaths.monkey) {
-      const r = await invoke<CmdResult>('push_script', { serial: selectedDevice, localPath: scriptPaths.monkey, remotePath: '/data/monkey.sh' })
-      if (!r?.success) { showNotif('error', `推送 monkey.sh 失败: ${r?.error}`); return false }
-      addLog('[推送] /data/monkey.sh OK')
+      const monkeyName = scriptPaths.monkey.split(/[\\/]/).pop()!
+      const r = await invoke<CmdResult>('push_script', { serial: selectedDevice, localPath: scriptPaths.monkey, remotePath: '/data/' + monkeyName })
+      if (!r?.success) { showNotif('error', `推送 ${monkeyName} 失败: ${r?.error}`); return false }
+      addLog('[推送] /data/' + monkeyName + ' OK')
     }
     if (scriptPaths.grafana) {
       const r = await invoke<CmdResult>('push_script', { serial: selectedDevice, localPath: scriptPaths.grafana, remotePath: '/data/grafana.sh' })
@@ -147,7 +148,9 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
     try {
       const pushOk = await pushStabilityScripts()
       if (!pushOk) { setActiveTests(prev => ({ ...prev, [testName]: { ...prev[testName], status: 'error', output: '脚本推送失败' } })); setRunning(false); return }
-      const r = await invoke<CmdResult>('start_stability_test', { serial: selectedDevice, testType })
+      // 从脚本路径提取文件名（如 monkey-coco.sh -> monkey-coco.sh）
+      const scriptName = scriptPaths.monkey ? scriptPaths.monkey.split(/[\\/]/).pop()! : 'monkey.sh'
+      const r = await invoke<CmdResult>('start_stability_test', { serial: selectedDevice, testType, scriptName })
       const status = r?.success ? 'success' : 'error'
       setActiveTests(prev => ({ ...prev, [testName]: { ...prev[testName], status, output: r?.output || r?.error || '' } }))
       showNotif(r?.success ? 'success' : 'error', r?.success ? `${testName} 已启动` : r?.error || '启动失败')
@@ -290,6 +293,26 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
     } catch (e) {
       setActiveTests(prev => ({ ...prev, ['单电量记录']: { ...prev['单电量记录'], status: 'error', output: String(e) } }))
       showNotif('error', `单电量记录异常: ${e}`)
+    }
+    setRunning(false)
+  }
+
+  const redirectLogs = async () => {
+    if (!selectedDevice) return
+    setRunning(true)
+    addLog('[稳定性] 开始日志重定向...')
+    try {
+      const r = await invoke<CmdResult>('redirect_logs', { serial: selectedDevice })
+      if (r?.success) {
+        showNotif('success', '日志重定向完成')
+        addLog('[稳定性] 日志重定向成功')
+      } else {
+        showNotif('error', r?.error || '重定向失败')
+        addLog('[稳定性] 日志重定向失败: ' + (r?.error || ''))
+      }
+    } catch (e) {
+      showNotif('error', String(e))
+      addLog('[稳定性] 日志重定向异常: ' + String(e))
     }
     setRunning(false)
   }
@@ -473,6 +496,9 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
           <button className="tool-btn" onClick={() => runStabilityTest('random', '随机稳定性')} disabled={running}>
             <RefreshCw size={18} /><span className="tool-name">随机稳定性</span>
           </button>
+          <button className="tool-btn" onClick={() => runStabilityTest('ocrcc', '点查稳定性')} disabled={running}>
+            <Activity size={18} /><span className="tool-name">点查稳定性</span>
+          </button>
           <button className="tool-btn" onClick={() => runStabilityTest('mem', '内存记录')} disabled={running}>
             <FileText size={18} /><span className="tool-name">内存记录</span>
           </button>
@@ -489,6 +515,9 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
           </button>
           <button className="btn btn-success" onClick={collectStabilityResults} disabled={running} style={{ fontSize: 12, padding: '5px 12px' }}>
             <Download size={12} /> 收集结果
+          </button>
+          <button className="btn btn-warning" onClick={redirectLogs} disabled={running} style={{ fontSize: 12, padding: '5px 12px' }}>
+            <FileText size={12} /> 日志重定向
           </button>
         </div>
         {/* Process output inside stability card */}
