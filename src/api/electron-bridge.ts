@@ -61,7 +61,7 @@ export async function invokeRaw(channel: string, data?: Record<string, unknown>)
   return await window.electronAPI.invoke(channel, data);
 }
 
-export async function open(options: { multiple?: boolean; filters?: { name: string; extensions: string[] }[]; defaultPath?: string }): Promise<string | null> {
+export async function open(options: { multiple?: boolean; filters?: { name: string; extensions: string[] }[]; defaultPath?: string; properties?: string[] }): Promise<string | null> {
   return await window.electronAPI.openFile(options);
 }
 

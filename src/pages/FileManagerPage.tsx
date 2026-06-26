@@ -138,31 +138,50 @@ export default function FileManagerPage({ selectedDevice, showNotif }: Props) {
     }
   }
 
+  const doPullFile = async (filename: string, localPath: string): Promise<boolean> => {
+    const r = await invoke<CmdResult>('pull_file', {
+      serial: selectedDevice,
+      remotePath: `${currentPath}/${filename}`,
+      localPath
+    })
+    return !!r?.success
+  }
+
   const pullFile = async (filename: string): Promise<string | null> => {
     const savePath = await saveDialog({
       defaultPath: filename,
       filters: [{ name: 'All Files', extensions: ['*'] }]
     })
     if (!savePath) return null
-    const r = await invoke<CmdResult>('pull_file', {
-      serial: selectedDevice,
-      remotePath: `${currentPath}/${filename}`,
-      localPath: savePath
-    })
-    if (r?.success) { showNotif('success', `文件已下载: ${savePath}`); return savePath }
-    showNotif('error', `下载失败: ${r?.error}`); return null
+    const ok = await doPullFile(filename, savePath)
+    if (ok) { showNotif('success', `文件已下载: ${savePath}`); return savePath }
+    showNotif('error', `下载失败: ${filename}`); return null
   }
 
   const exportSelected = async () => {
     if (selectedItems.size === 0) return
-    let count = 0
+    const fileList: { name: string; type: string }[] = []
     for (const name of selectedItems) {
       const item = files.find(f => f.name === name)
-      if (!item || item.type === 'dir') continue
-      await pullFile(name)
-      count++
+      if (item && item.type !== 'dir') fileList.push({ name: item.name, type: item.type })
     }
-    showNotif('success', `已导出 ${count} 个文件`)
+    if (fileList.length === 0) return
+
+    if (fileList.length === 1) {
+      const result = await pullFile(fileList[0].name)
+      if (!result) showNotif('error', '导出失败')
+      return
+    }
+
+    const dir = await openDialog({ properties: ['openDirectory'] })
+    if (!dir) return
+    let ok = 0
+    for (const f of fileList) {
+      const target = `${dir}\${f.name}`
+      const r = await doPullFile(f.name, target)
+      if (r) ok++
+    }
+    showNotif(ok > 0 ? 'success' : 'error', ok > 0 ? `已导出 ${ok}/${fileList.length} 个文件到: ${dir}` : '导出失败')
   }
 
   const pushFile = async () => {
