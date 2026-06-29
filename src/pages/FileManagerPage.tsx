@@ -165,28 +165,60 @@ export default function FileManagerPage({ selectedDevice, showNotif }: Props) {
     setExporting(true);
     try {
     if (selectedItems.size === 0) return
-    const fileList: { name: string; type: string }[] = []
+    const dirs: string[] = []
+    const fileNames: string[] = []
     for (const name of selectedItems) {
       const item = files.find(f => f.name === name)
-      if (item && item.type !== 'dir') fileList.push({ name: item.name, type: item.type })
+      if (!item) continue
+      if (item.type === 'dir') {
+        dirs.push(item.name)
+      } else {
+        fileNames.push(item.name)
+      }
     }
-    if (fileList.length === 0) return
 
-    if (fileList.length === 1) {
-      const result = await pullFile(fileList[0].name)
+    // 如果只选了文件夹（没有文件），用 adb pull 整目录导出
+    if (fileNames.length === 0 && dirs.length > 0) {
+      const destDir = await openDialog({ properties: ['openDirectory'] })
+      if (!destDir) return
+      let ok = 0
+      for (const dirName of dirs) {
+        const localTarget = `${destDir}/${dirName}`
+        const r = await doPullFile(dirName, localTarget)
+        if (r) ok++
+      }
+      showNotif(ok > 0 ? 'success' : 'error', ok > 0 ? `已导出 ${ok}/${dirs.length} 个目录到: ${destDir}` : '导出失败')
+      return
+    }
+
+    // 单个文件：弹保存对话框
+    if (fileNames.length === 1 && dirs.length === 0) {
+      const result = await pullFile(fileNames[0])
       if (!result) showNotif('error', '导出失败')
       return
     }
 
-    const dir = await openDialog({ properties: ['openDirectory'] })
-    if (!dir) return
+    // 多选（含文件或混合）：选目标目录批量导出
+    const destDir = await openDialog({ properties: ['openDirectory'] })
+    if (!destDir) return
     let ok = 0
-    for (const f of fileList) {
-      const target = `${dir}\${f.name}`
-      const r = await doPullFile(f.name, target)
+    const total = fileNames.length + dirs.length
+
+    // 导出文件
+    for (const fname of fileNames) {
+      const target = `${destDir}/${fname}`
+      const r = await doPullFile(fname, target)
       if (r) ok++
     }
-    showNotif(ok > 0 ? 'success' : 'error', ok > 0 ? `已导出 ${ok}/${fileList.length} 个文件到: ${dir}` : '导出失败')
+
+    // 导出目录（adb pull 递归拉取）
+    for (const dirName of dirs) {
+      const localTarget = `${destDir}/${dirName}`
+      const r = await doPullFile(dirName, localTarget)
+      if (r) ok++
+    }
+
+    showNotif(ok > 0 ? 'success' : 'error', ok > 0 ? `已导出 ${ok}/${total} 个项目到: ${destDir}` : '导出失败')
   } finally {
     setExporting(false);
   }

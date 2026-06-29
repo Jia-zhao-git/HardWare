@@ -177,21 +177,42 @@ async function pull_file(event, { serial, remotePath, localPath }) {
             proc.stderr.on("data", (d) => { stderr += d.toString(); });
             proc.on("close", (code) => {
                 if (code === 0 && fs2.existsSync(tmpFile)) {
+                    const isDir = fs2.statSync(tmpFile).isDirectory();
                     try {
                         fs2.renameSync(tmpFile, localPath);
                         resolve({ success: true, output: "saved to " + localPath });
                     } catch(renameErr) {
                         try {
-                            fs2.copyFileSync(tmpFile, localPath);
-                            fs2.unlinkSync(tmpFile);
+                            if (isDir) {
+                                fs2.cpSync(tmpFile, localPath, { recursive: true });
+                                fs2.rmSync(tmpFile, { recursive: true, force: true });
+                            } else {
+                                fs2.copyFileSync(tmpFile, localPath);
+                                fs2.unlinkSync(tmpFile);
+                            }
                             resolve({ success: true, output: "copied to " + localPath });
                         } catch(copyErr) {
-                            fs2.unlinkSync(tmpFile);
+                            try {
+                                if (isDir) {
+                                    fs2.rmSync(tmpFile, { recursive: true, force: true });
+                                } else {
+                                    fs2.unlinkSync(tmpFile);
+                                }
+                            } catch {}
                             resolve({ success: false, output: "rename/copy failed: " + copyErr.message, error: copyErr.message });
                         }
                     }
                 } else {
-                    if (fs2.existsSync(tmpFile)) fs2.unlinkSync(tmpFile);
+                    try {
+                        if (fs2.existsSync(tmpFile)) {
+                            const stat = fs2.statSync(tmpFile);
+                            if (stat.isDirectory()) {
+                                fs2.rmSync(tmpFile, { recursive: true, force: true });
+                            } else {
+                                fs2.unlinkSync(tmpFile);
+                            }
+                        }
+                    } catch {}
                     resolve({ success: false, output: "adb exit " + code + ": " + stderr });
                 }
             });
