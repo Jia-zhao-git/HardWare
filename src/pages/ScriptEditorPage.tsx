@@ -514,16 +514,13 @@ export default function ScriptEditorPage({ selectedDevice, showNotif }: Props) {
     if (!selectedDevice) { showNotif('warning', '请先连接设备'); return }
     if (steps.length === 0) { showNotif('warning', '脚本为空'); return }
 
-    // 首次保存：让用户选择脚本存放目录
-    let dir = scriptsDir
-    if (!dir) {
-      const chosen = await openDialog({ properties: ['openDirectory'] })
-      if (!chosen) return
-      dir = chosen
-      setScriptsDirState(dir)
-      localStorage.setItem('adb_script_editor_scripts_dir', dir)
-      await setScriptsDir(dir)
-    }
+    // 每次保存都让用户选择存放目录
+    const chosen = await openDialog({ properties: ['openDirectory'] })
+    if (!chosen) return
+    const dir = chosen
+    setScriptsDirState(dir)
+    localStorage.setItem('adb_script_editor_scripts_dir', dir)
+    await setScriptsDir(dir)
 
     const safeName = scriptName.replace(/[\/:*?"<>|]/g, '_')
     const shFile = `${safeName}.sh`
