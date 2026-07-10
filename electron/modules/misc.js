@@ -119,7 +119,97 @@ async function collect_battery_log(event, { serial }) {
     return { success: r1.success, output: msg, duration: durationInfo, error: r1.error };
 }
 
+// ---- Script file operations ----
+// scriptsDir: 用户配置的本地脚本存放目录
+let _scriptsDir = null;
+
+async function set_scripts_dir(event, { dir }) {
+    _scriptsDir = dir;
+    if (dir) fs.mkdirSync(dir, { recursive: true });
+    return { success: true };
+}
+
+async function list_scripts(event, { serial }) {
+    if (!_scriptsDir) return { success: false, error: 'scripts dir not set', scripts: [] };
+    try {
+        const metaPath = path.join(_scriptsDir, '.meta.json');
+        let meta = {};
+        if (fs.existsSync(metaPath)) {
+            meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+        }
+        const files = fs.readdirSync(_scriptsDir)
+            .filter(f => f.endsWith('.sh'))
+            .map(f => {
+                const scriptMeta = meta[f] || {};
+                return {
+                    name: f.replace(/\.sh$/, ''),
+                    filename: f,
+                    serial: scriptMeta.serial || '',
+                    modified: scriptMeta.modified || fs.statSync(path.join(_scriptsDir, f)).mtime.toISOString(),
+                };
+            })
+            .filter(f => !serial || f.serial === serial);
+        return { success: true, scripts: files };
+    } catch (e) {
+        return { success: false, error: e.message, scripts: [] };
+    }
+}
+
+async function read_script_file(event, { filename }) {
+    if (!_scriptsDir) return { success: false, error: 'scripts dir not set' };
+    try {
+        const content = fs.readFileSync(path.join(_scriptsDir, filename), 'utf8');
+        return { success: true, content };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+async function write_script_file(event, { filename, content, serial }) {
+    if (!_scriptsDir) return { success: false, error: 'scripts dir not set' };
+    try {
+        fs.mkdirSync(_scriptsDir, { recursive: true });
+        fs.writeFileSync(path.join(_scriptsDir, filename), content, 'utf8');
+        // 更新 meta
+        const metaPath = path.join(_scriptsDir, '.meta.json');
+        let meta = {};
+        if (fs.existsSync(metaPath)) {
+            try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch {}
+        }
+        meta[filename] = { serial: serial || '', modified: new Date().toISOString() };
+        fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+async function delete_script_file(event, { filename }) {
+    if (!_scriptsDir) return { success: false, error: 'scripts dir not set' };
+    try {
+        const fullPath = path.join(_scriptsDir, filename);
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+        // 更新 meta
+        const metaPath = path.join(_scriptsDir, '.meta.json');
+        if (fs.existsSync(metaPath)) {
+            try {
+                const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+                delete meta[filename];
+                fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+            } catch {}
+        }
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
 module.exports = {
     collect_battery_log,
     calculateDuration,
+    set_scripts_dir,
+    list_scripts,
+    read_script_file,
+    write_script_file,
+    delete_script_file,
 };

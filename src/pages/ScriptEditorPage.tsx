@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-import { invoke, save as saveDialog, open as openDialog, readTextFile, writeTextFile, CmdResult, onScriptOutput, onScriptDone } from '../api/electron-bridge'
+import { invoke, save as saveDialog, open as openDialog, readTextFile, writeTextFile, CmdResult, onScriptOutput, onScriptDone, setScriptsDir, listScripts, readScriptFile, writeScriptFile, deleteScriptFile, ScriptMeta } from '../api/electron-bridge'
 import {
   Play, Square, Save, Trash2, ArrowUp, ArrowDown,
   Plus, GripVertical, MousePointerClick, Hand, PenLine,
@@ -245,17 +245,28 @@ export default function ScriptEditorPage({ selectedDevice, showNotif }: Props) {
   const [selectedSteps, setSelectedSteps] = useState<Set<string>>(new Set())
   const [draggedStepId, setDraggedStepId] = useState<string | null>(null)  // 拖拽中的步骤ID
 
-  // 保存的脚本列表（按设备 serial 隔离）
-  const [savedScripts, setSavedScripts] = useState<Record<string, { name: string; steps: ScriptStep[] }[]>>({})
+  // 脚本存放目录（持久化到 localStorage）
+  const [scriptsDir, setScriptsDirState] = useState<string>('')
+  // 当前已保存脚本列表
+  const [savedScriptList, setSavedScriptList] = useState<ScriptMeta[]>([])
   const outputEndRef = useRef<HTMLDivElement>(null)
 
-  // 加载保存的脚本列表
+  // 初始化：加载脚本目录
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem('adb_script_editor_scripts')
-      if (stored) setSavedScripts(JSON.parse(stored))
-    } catch {}
+    const stored = localStorage.getItem('adb_script_editor_scripts_dir')
+    if (stored) {
+      setScriptsDirState(stored)
+      setScriptsDir(stored)
+    }
   }, [])
+
+  // 当 scriptsDir 或 serial 变化时，重新加载脚本列表
+  useEffect(() => {
+    if (!scriptsDir) return
+    listScripts(selectedDevice || undefined)
+      .then(setSavedScriptList)
+      .catch(() => setSavedScriptList([]))
+  }, [scriptsDir, selectedDevice])
 
   // 实时生成脚本预览
   const scriptPreview = useMemo(() => generateShellScript(steps, enableLoop), [steps, enableLoop])
@@ -497,56 +508,77 @@ export default function ScriptEditorPage({ selectedDevice, showNotif }: Props) {
   }
 
   // ===========================
-  // 保存脚本
+  // 保存脚本（到本地文件系统）
   // ===========================
-  const handleSaveScript = () => {
+  const handleSaveScript = async () => {
     if (!selectedDevice) { showNotif('warning', '请先连接设备'); return }
     if (steps.length === 0) { showNotif('warning', '脚本为空'); return }
-    const serial = selectedDevice
-    const newScripts = {
-      ...savedScripts,
-      [serial]: [
-        ...(savedScripts[serial] || []).filter(s => s.name !== scriptName),
-        { name: scriptName, steps },
-      ],
+
+    // 首次保存：让用户选择脚本存放目录
+    let dir = scriptsDir
+    if (!dir) {
+      const chosen = await openDialog({ properties: ['openDirectory'] })
+      if (!chosen) return
+      dir = chosen
+      setScriptsDirState(dir)
+      localStorage.setItem('adb_script_editor_scripts_dir', dir)
+      await setScriptsDir(dir)
     }
-    setSavedScripts(newScripts)
-    localStorage.setItem('adb_script_editor_scripts', JSON.stringify(newScripts))
-    showNotif('success', `脚本 "${scriptName}" 已保存`)
+
+    const safeName = scriptName.replace(/[\/:*?"<>|]/g, '_')
+    const shFile = `${safeName}.sh`
+    const metaFile = `${safeName}.meta.json`
+
+    const content = scriptPreview
+    const metaContent = JSON.stringify({ customName, steps, enableLoop }, null, 2)
+
+    try {
+      await writeScriptFile(shFile, content, selectedDevice)
+      await writeScriptFile(metaFile, metaContent, selectedDevice)
+      // 刷新列表
+      const updated = await listScripts(selectedDevice)
+      setSavedScriptList(updated)
+      showNotif('success', `脚本 "${scriptName}" 已保存`)
+    } catch (e) {
+      showNotif('error', `保存失败: ${String(e)}`)
+    }
   }
 
   // ===========================
-  // 加载脚本
+  // 加载脚本（从本地文件系统）
   // ===========================
-  const handleLoadScript = (serial: string, name: string) => {
-    const list = savedScripts[serial] || []
-    const found = list.find(s => s.name === name)
-    if (found) {
-      setSteps(found.steps)
-      // 从脚本名称中提取自定义部分（格式：monkey-{自定义}-{时间戳}）
-      const parts = found.name.split('-')
-      if (parts.length >= 3 && parts[0] === 'monkey') {
-        // 提取自定义部分（去掉首尾的时间戳）
-        const customPart = parts.slice(1, -2).join('-')
-        setCustomName(customPart || '测试')
-      } else {
-        setCustomName('测试')
-      }
-      showNotif('success', `已加载脚本 "${name}"`)
+  const handleLoadScript = async (filename: string) => {
+    if (!scriptsDir) { showNotif('warning', '请先保存一个脚本以设置目录'); return }
+    const baseName = filename.replace(/\.sh$/, '')
+    const metaFile = `${baseName}.meta.json`
+
+    try {
+      const metaContent = await readScriptFile(metaFile)
+      const meta = JSON.parse(metaContent)
+      setSteps(meta.steps || [])
+      if (meta.enableLoop !== undefined) setEnableLoop(meta.enableLoop)
+      setCustomName(meta.customName || baseName)
+      showNotif('success', `已加载脚本 "${baseName}"`)
+    } catch {
+      showNotif('error', `加载失败：无法读取脚本元数据`)
     }
   }
 
   // ===========================
-  // 删除脚本
+  // 删除脚本（从本地文件系统）
   // ===========================
-  const handleDeleteScript = (serial: string, name: string) => {
-    const newScripts = {
-      ...savedScripts,
-      [serial]: (savedScripts[serial] || []).filter(s => s.name !== name),
+  const handleDeleteScript = async (filename: string) => {
+    if (!scriptsDir) return
+    const baseName = filename.replace(/\.sh$/, '')
+    try {
+      await deleteScriptFile(filename)
+      await deleteScriptFile(`${baseName}.meta.json`)
+      const updated = await listScripts(selectedDevice || undefined)
+      setSavedScriptList(updated)
+      showNotif('success', `已删除 "${baseName}"`)
+    } catch (e) {
+      showNotif('error', `删除失败: ${String(e)}`)
     }
-    setSavedScripts(newScripts)
-    localStorage.setItem('adb_script_editor_scripts', JSON.stringify(newScripts))
-    showNotif('success', `已删除脚本 "${name}"`)
   }
 
   // ===========================
@@ -813,7 +845,7 @@ EOF`
   }
 
   const currentOpDef = STEP_DEFS.find(d => d.type === selectedOpType)!
-  const deviceScripts = savedScripts[selectedDevice] || []
+  const deviceScripts = savedScriptList
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 12, overflow: 'hidden' }}>
@@ -858,7 +890,7 @@ EOF`
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flex: 1 }}>
             <select
               value=""
-              onChange={e => { if (e.target.value) { const [s, n] = e.target.value.split('|'); handleLoadScript(s, n) } }}
+              onChange={e => { if (e.target.value) handleLoadScript(e.target.value) }}
               style={{
                 background: 'var(--bg-card)',
                 border: '1px solid var(--border-color)',
@@ -873,7 +905,7 @@ EOF`
             >
               <option value="">— 加载已保存的脚本 —</option>
               {deviceScripts.map(s => (
-                <option key={s.name} value={`${selectedDevice}|${s.name}`}>{s.name}</option>
+                <option key={s.filename} value={s.filename}>{s.name}</option>
               ))}
             </select>
           </div>

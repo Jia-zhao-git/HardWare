@@ -438,10 +438,10 @@ export const deviceConfig = [
       cpu: 'RV1106',
       storage: '128MB',
       ram: '256MB',
-      display: '3.48英寸 172x640',
+      display: '3.48英寸 172x640 自动关机-未激活3H;已激活12H',
       battery: '820mAh',
       wifi: '博流 BL602',
-      manufacturer: '麦度',
+      manufacturer: '麦度'
     }
   },
   {

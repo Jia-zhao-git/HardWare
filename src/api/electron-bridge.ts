@@ -81,6 +81,29 @@ export async function readTextFile(path: string): Promise<string> {
   return result.content;
 }
 
+// Script editor file operations (local filesystem)
+export interface ScriptMeta { name: string; filename: string; serial: string; modified: string }
+export async function setScriptsDir(dir: string): Promise<void> {
+  await invoke('set_scripts_dir', { dir });
+}
+export async function listScripts(serial?: string): Promise<ScriptMeta[]> {
+  const r = await invoke<{ success: boolean; scripts: ScriptMeta[] }>('list_scripts', { serial: serial || '' });
+  return r.scripts || [];
+}
+export async function readScriptFile(filename: string): Promise<string> {
+  const r = await invoke<{ success: boolean; content?: string; error?: string }>('read_script_file', { filename });
+  if (!r.success || !r.content) throw new Error(r.error || 'read failed');
+  return r.content;
+}
+export async function writeScriptFile(filename: string, content: string, serial?: string): Promise<void> {
+  const r = await invoke<{ success: boolean; error?: string }>('write_script_file', { filename, content, serial: serial || '' });
+  if (!r.success) throw new Error(r.error || 'write failed');
+}
+export async function deleteScriptFile(filename: string): Promise<void> {
+  const r = await invoke<{ success: boolean; error?: string }>('delete_script_file', { filename });
+  if (!r.success) throw new Error(r.error || 'delete failed');
+}
+
 // Log stream types and listeners
 export interface LogStreamData {
   serial: string;

@@ -238,6 +238,11 @@ function registerMiscHandlers() {
             return { success: false, error: e.message };
         }
     });
+    if (misc.set_scripts_dir) ipcMain.handle('set_scripts_dir', misc.set_scripts_dir);
+    if (misc.list_scripts) ipcMain.handle('list_scripts', misc.list_scripts);
+    if (misc.read_script_file) ipcMain.handle('read_script_file', misc.read_script_file);
+    if (misc.write_script_file) ipcMain.handle('write_script_file', misc.write_script_file);
+    if (misc.delete_script_file) ipcMain.handle('delete_script_file', misc.delete_script_file);
 }
 
 // ============================================================================
