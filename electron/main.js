@@ -154,11 +154,11 @@ function registerFileHandlers() {
     });
     // write_file
     if (files.writeFile) {
-        ipcMain.handle('write_file', (event, args) => files.writeFile(args));
+        ipcMain.handle('write_file', (event, args) => files.writeFile(event, args));
     }
     // read_file
     if (files.readFile) {
-        ipcMain.handle('read_file', (event, args) => files.readFile(args));
+        ipcMain.handle('read_file', (event, args) => files.readFile(event, args));
     }
 }
 
