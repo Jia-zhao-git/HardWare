@@ -256,6 +256,30 @@ class TestRunner:
                     res.screenshot = str(relaunched)
                     res.status = "warned"
                     res.message = "App appeared to exit to home; relaunched target app"
+            elif action == "guarded_back":
+                # Allow a real Back operation to escape deep/stuck pages, but keep the test inside the target app.
+                # If Back reaches home, relaunch the app and mark WARN instead of failing/stopping the long run.
+                appid = str(step.get("appid") or step.get("app_id") or "").strip()
+                if not appid:
+                    raise ValueError("guarded_back requires appid")
+                home_key = step.get("home") or step.get("home_capture") or "home"
+                key = step.get("key", "asr")
+                self.input.press_key(str(key), int(step.get("duration_ms", 120)))
+                time.sleep(float(step.get("wait", 0.8)))
+                label = str(step.get("capture") or f"after_back_{index}")
+                after = self._capture(index, label, steps_dir)
+                captures[label] = after
+                res.screenshot = str(after)
+                res.command = f"guarded_back key={key} appid={appid}"
+                if home_key in captures and not files_differ(captures[home_key], after):
+                    self.adb.shell(f"miniapp_cli start {appid}", timeout=int(step.get("timeout", 30)), check=False)
+                    time.sleep(float(step.get("relaunch_wait", 2.5)))
+                    relaunched_label = str(step.get("relaunch_capture") or f"back_relaunched_{index}")
+                    relaunched = self._capture(index, relaunched_label, steps_dir)
+                    captures[relaunched_label] = relaunched
+                    res.screenshot = str(relaunched)
+                    res.status = "warned"
+                    res.message = "Back reached home; relaunched target app"
             elif action == "random_tap":
                 # Tap N times at random positions within the safe area
                 count = int(step.get("count", step.get("n", 3)))
@@ -341,6 +365,9 @@ class TestRunner:
                 allowed_ops = step.get("ops") or step.get("operations") or ["tap", "swipe", "long_press"]
                 if isinstance(allowed_ops, str):
                     allowed_ops = [x.strip() for x in allowed_ops.split(",") if x.strip()]
+                appid = str(step.get("appid") or step.get("app_id") or "").strip()
+                home_key = step.get("home") or step.get("home_capture") or "home"
+                key = step.get("back_key", "asr")
                 ops_done = 0
                 commands = []
                 for _ in range(int(step.get("n", 5))):
@@ -372,6 +399,19 @@ class TestRunner:
                         self.adb.shell(f"send_event touch press {p.x} {p.y}; sleep {ms/1000:.3f}; send_event touch release", timeout=10)
                         commands.append(f"long_press({sx},{sy},{ms}ms)")
                         ops_done += 1
+                    elif op in ("back", "guarded_back"):
+                        self.input.press_key(str(key), int(step.get("back_duration_ms", 120)))
+                        commands.append("guarded_back")
+                        ops_done += 1
+                        time.sleep(float(step.get("back_wait", 0.8)))
+                        if appid and home_key in captures:
+                            guard_label = f"shuffle_back_guard_{index}_{ops_done}"
+                            after = self._capture(index, guard_label, steps_dir)
+                            captures[guard_label] = after
+                            if not files_differ(captures[home_key], after):
+                                self.adb.shell(f"miniapp_cli start {appid}", timeout=int(step.get("timeout", 30)), check=False)
+                                time.sleep(float(step.get("relaunch_wait", 2.5)))
+                                commands.append("relaunch_after_home")
                     time.sleep(random.uniform(0.3, 0.7))
                 res.command = f"shuffle({ops_done}, safe={safe_mode}, margin={margin}): " + ", ".join(commands)
                 if step.get("capture"):

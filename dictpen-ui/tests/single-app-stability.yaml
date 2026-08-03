@@ -4,8 +4,9 @@
 # How to use:
 # 1. Replace <APPID> with the target miniapp id.
 # 2. In GUI, set loop=0 and duration=720 for a 12-hour stability run.
-# 3. Random operations use a safe center area and avoid hardware back key / edge gestures.
-# 4. ensure_app_active detects accidental exit-to-home and relaunches the app with WARN evidence.
+# 3. Random operations use a safe center area and avoid edge gestures.
+# 4. guarded_back is allowed periodically to escape deep/stuck pages.
+# 5. ensure_app_active detects accidental exit-to-home and relaunches the app with WARN evidence.
 
 name: single_app_stability
 on_failure:
@@ -40,7 +41,10 @@ steps:
     action: shuffle
     safe_mode: true
     margin: 0.30
-    ops: [tap, swipe, long_press]
+    ops: [tap, swipe, long_press, guarded_back]
+    appid: <APPID>
+    home: home
+    back_key: asr
     dirs: [up, down]
     n: 8
     wait: 0.5
@@ -52,6 +56,22 @@ steps:
     home: home
     wait: 2.5
     capture: guard_1
+
+  - name: planned_back_escape
+    action: guarded_back
+    appid: <APPID>
+    home: home
+    key: asr
+    wait: 0.8
+    relaunch_wait: 2.5
+    capture: after_planned_back
+
+  - name: guard_app_active_after_back
+    action: ensure_app_active
+    appid: <APPID>
+    home: home
+    wait: 2.5
+    capture: guard_after_back
 
   - name: safe_random_taps
     action: random_tap

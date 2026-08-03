@@ -185,7 +185,7 @@ templates:
 
   - name: single_app_stability
     label: Single App Stability
-    description: Long run inside one app with safe gestures and auto-relaunch guard
+    description: Long run inside one app with guarded Back escape and auto-relaunch guard
     content: |
       name: single_app_stability
       on_failure:
@@ -214,7 +214,10 @@ templates:
           action: shuffle
           safe_mode: true
           margin: 0.30
-          ops: [tap, swipe, long_press]
+          ops: [tap, swipe, long_press, guarded_back]
+          appid: <APPID>
+          home: home
+          back_key: asr
           dirs: [up, down]
           n: 8
           wait: 0.5
@@ -226,6 +229,15 @@ templates:
           home: home
           wait: 2.5
           capture: guard
+
+        - name: planned_back_escape
+          action: guarded_back
+          appid: <APPID>
+          home: home
+          key: asr
+          wait: 0.8
+          relaunch_wait: 2.5
+          capture: after_planned_back
 
         - name: proc_snapshot
           action: proc_snapshot
