@@ -1,4 +1,4 @@
-// Module: uitest - UI Automation Test for Youdao Dictionary Pen
+﻿// Module: uitest - UI Automation Test for Youdao Dictionary Pen
 // IPC handlers:
 //   uitest_start    { serial, testFile, loops, durationMin }
 //   uitest_stop     { serial }
@@ -41,11 +41,8 @@ const DICTPEN_UI_PY   = path.join(DICTPEN_UI_ROOT, 'dictpen-ui.py');
 const RUNS_DIR        = path.join(DICTPEN_UI_ROOT, 'runs');
 
 // --------------------------------------------------------------------------
-// State
 // --------------------------------------------------------------------------
-const testState = {
-// --------------------------------------------------------------------------
-// Per-device state — keyed by serial
+// Per-device state �?keyed by serial
 // --------------------------------------------------------------------------
 const deviceStates = new Map(); // serial -> DeviceState
 
@@ -64,12 +61,12 @@ function createDeviceState(serial) {
     };
 }
 
-function getState(serial) {
+function getDevState(serial) {
     if (!deviceStates.has(serial)) deviceStates.set(serial, createDeviceState(serial));
     return deviceStates.get(serial);
 }
 
-// Legacy single-state shim (used by old single-device callers)
+// Legacy shim: running = any device is running
 const testState = { get running() { return [...deviceStates.values()].some(s => s.running); } };
 
 function addLog(state, line) {
@@ -79,7 +76,7 @@ function addLog(state, line) {
 }
 
 function broadcastLog(win, line, serial) {
-    const state = serial ? getState(serial) : null;
+    const state = serial ? getDevState(serial) : null;
     if (state) addLog(state, line);
     if (win && !win.isDestroyed()) {
         win.webContents.send('uitest_log', { line, serial: serial || null });
@@ -91,7 +88,7 @@ function broadcastLog(win, line, serial) {
 // --------------------------------------------------------------------------
 async function uitest_start(event, { serial, testFile, loops, durationMin }) {
     // uitest_start: single-device entry point (also called from uitest_start_multi)
-    const state = getState(serial);
+    const state = getDevState(serial);
     if (state.running) {
         return { success: false, error: `Device ${serial} already running` };
     }
@@ -142,7 +139,7 @@ async function uitest_start(event, { serial, testFile, loops, durationMin }) {
             : []
     );
 
-    broadcastLog(win, `[START][${serial}] loops=${loops || '∞'} duration=${durationMin || '—'}min`, serial);
+    broadcastLog(win, `[START][\] loops=\ duration=\min`, serial);
 
     // Check if SKU calibration file exists; warn immediately if missing
     (async () => {
@@ -156,13 +153,13 @@ async function uitest_start(event, { serial, testFile, loops, durationMin }) {
             if (skuOut) {
                 const calibFile = path.join(DICTPEN_UI_ROOT, 'ui-map', `${skuOut}.json`);
                 if (!fs.existsSync(calibFile)) {
-                    broadcastLog(win, `[WARN] 未找到 SKU "${skuOut}" 的校准文件`, serial);
-                    broadcastLog(win, `[WARN] 坐标将依赖 cfg.json 默认值，建议先运行「校准」（约 60 秒）`, serial);
+                    broadcastLog(win, `[WARN] 未找�?SKU "${skuOut}" 的校准文件`, serial);
+                    broadcastLog(win, `[WARN] 坐标将依�?cfg.json 默认值，建议先运行「校准」（�?60 秒）`, serial);
                 } else {
-                    broadcastLog(win, `[INFO] 已加载校准文件: ui-map/${skuOut}.json`, serial);
+                    broadcastLog(win, `[INFO] 已加载校准文�? ui-map/${skuOut}.json`, serial);
                 }
             }
-        } catch (_) { /* non-fatal — don't block test start */ }
+        } catch (_) { /* non-fatal �?don't block test start */ }
     })();
 
     proc.stdout.on('data', (chunk) => {
@@ -337,7 +334,7 @@ th{background:#f0f0f0}
 .stat{display:inline-block;margin:8px 12px 8px 0;padding:10px 18px;border:1px solid #ddd;background:#fff;border-radius:6px;font-size:18px}
 canvas{max-width:960px;width:100%;background:#fff;border:1px solid #ddd;display:block;margin-bottom:24px}
 </style>
-<h1>DictPen UI Test Report${serial ? ' — SN: ' + serial : ''} (Stopped)</h1>
+<h1>DictPen UI Test Report${serial ? ' �?SN: ' + serial : ''} (Stopped)</h1>
 <p>Generated: ${now.toLocaleString('zh-CN')} &nbsp; Cycles: ${total}</p>
 <div>
   <div class='stat'>Cycles<br><b>${total}</b></div>
@@ -436,7 +433,7 @@ async function uitest_status(event, { serial } = {}) {
 }
 
 // --------------------------------------------------------------------------
-// uitest_start_multi  — start test on multiple devices simultaneously
+// uitest_start_multi  �?start test on multiple devices simultaneously
 // --------------------------------------------------------------------------
 async function uitest_start_multi(event, { serials, testFile, loops, durationMin }) {
     if (!serials || serials.length === 0) return { success: false, error: 'No serials provided' };
@@ -450,14 +447,14 @@ async function uitest_start_multi(event, { serials, testFile, loops, durationMin
 }
 
 // --------------------------------------------------------------------------
-// uitest_stop_all  — stop all running devices
+// uitest_stop_all  �?stop all running devices
 // --------------------------------------------------------------------------
 async function uitest_stop_all(event, {}) {
     return uitest_stop(event, {});
 }
 
 // --------------------------------------------------------------------------
-// uitest_list_reports  — list summary-*.html under runs/
+// uitest_list_reports  �?list summary-*.html under runs/
 // --------------------------------------------------------------------------
 async function uitest_list_reports(event, {}) {
     if (!fs.existsSync(RUNS_DIR)) return { reports: [] };
@@ -474,7 +471,7 @@ async function uitest_list_reports(event, {}) {
 }
 
 // --------------------------------------------------------------------------
-// uitest_open_report  — open HTML in default browser
+// uitest_open_report  �?open HTML in default browser
 // --------------------------------------------------------------------------
 async function uitest_open_report(event, { reportPath }) {
     try {
@@ -487,7 +484,7 @@ async function uitest_open_report(event, { reportPath }) {
 }
 
 // --------------------------------------------------------------------------
-// uitest_delete_report  — delete a summary report file
+// uitest_delete_report  �?delete a summary report file
 // --------------------------------------------------------------------------
 async function uitest_delete_report(event, { reportPath }) {
     try {
@@ -509,7 +506,7 @@ async function uitest_delete_report(event, { reportPath }) {
 }
 
 // --------------------------------------------------------------------------
-// uitest_list_tests  — list .yaml files in tests/
+// uitest_list_tests  �?list .yaml files in tests/
 // --------------------------------------------------------------------------
 async function uitest_list_tests(event, {}) {
     const testsDir = path.join(DICTPEN_UI_ROOT, 'tests');
@@ -529,7 +526,7 @@ async function uitest_get_logs(event, { offset }) {
 }
 
 // --------------------------------------------------------------------------
-// uitest_read_test  — read test YAML content
+// uitest_read_test  �?read test YAML content
 // --------------------------------------------------------------------------
 async function uitest_read_test(event, { testFile }) {
     const p = path.isAbsolute(testFile) ? testFile : path.join(DICTPEN_UI_ROOT, testFile);
@@ -538,7 +535,7 @@ async function uitest_read_test(event, { testFile }) {
 }
 
 // --------------------------------------------------------------------------
-// uitest_write_test  — save test YAML content
+// uitest_write_test  �?save test YAML content
 // --------------------------------------------------------------------------
 async function uitest_write_test(event, { testFile, content }) {
     const p = path.isAbsolute(testFile) ? testFile : path.join(DICTPEN_UI_ROOT, testFile);
@@ -552,7 +549,7 @@ async function uitest_write_test(event, { testFile, content }) {
 }
 
 // --------------------------------------------------------------------------
-// uitest_run_gen  — re-generate all-apps.yaml from live device
+// uitest_run_gen  �?re-generate all-apps.yaml from live device
 // --------------------------------------------------------------------------
 async function uitest_run_gen(event, { serial }) {
     const genPy = path.join(DICTPEN_UI_ROOT, 'gen_all_apps_test.py');
@@ -573,7 +570,7 @@ async function uitest_run_gen(event, { serial }) {
 }
 
 // --------------------------------------------------------------------------
-// uitest_calibrate  — auto-detect touch mapping for the current device
+// uitest_calibrate  �?auto-detect touch mapping for the current device
 // --------------------------------------------------------------------------
 async function uitest_calibrate(event, { serial }) {
     const calPy = path.join(DICTPEN_UI_ROOT, 'dictpen_ui', 'calibrate.py');
