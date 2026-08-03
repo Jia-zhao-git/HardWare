@@ -73,6 +73,8 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
   const [deviceInfo, setDeviceInfo] = useState<DeviceRunInfo | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const startTimeRef = useRef<number | null>(null)  // avoids stale closure in onUitestDone
+  const runStartRef = useRef<string | null>(null)   // run_id of first cycle in this session
 
   const loadTests = useCallback(async () => {
     const r = await invoke<{ tests: UitestTestFile[] }>('uitest_list_tests', {})
@@ -124,14 +126,18 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
       setLogs(prev => [...prev.slice(-1999), line])
     })
     const unsubDone = onUitestDone(({ code, cycles, summaryReport, lastStatus }) => {
-      // Freeze elapsed time when test stops
-      setStoppedElapsed(status?.startTime ? Math.round((Date.now() - status.startTime) / 1000) : 0)
+      // Use ref to avoid stale closure (callback captured at mount with [] deps)
+      const t0 = startTimeRef.current
+      setStoppedElapsed(t0 ? Math.round((Date.now() - t0) / 1000) : 0)
       setStatus(prev => prev ? { ...prev, running: false, cycles, lastStatus, summaryReport } : null)
       stopPoll()
       loadReports()
       showNotif(code === 0 ? 'success' : 'error', `测试完成: ${cycles} 轮, ${lastStatus}`)
       if (summaryReport) {
-        setTimeout(() => invoke('uitest_open_report', { reportPath: summaryReport }), 500)
+        setTimeout(() => {
+          invoke('uitest_open_report', { reportPath: summaryReport })
+          setActiveTab('reports')
+        }, 600)
       }
     })
     return () => { unsubLog(); unsubDone() }
@@ -148,6 +154,8 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
     setLogs([])
     setDeviceInfo(null)
     setStoppedElapsed(0)
+    startTimeRef.current = Date.now()
+    runStartRef.current = null
     setActiveTab('run')
     const r = await invoke<{ success: boolean; error?: string }>('uitest_start', {
       serial: selectedDevice,
@@ -165,8 +173,9 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
   }
 
   const stop = async () => {
-    // Freeze elapsed time before sending stop
-    setStoppedElapsed(status?.startTime ? Math.round((Date.now() - status.startTime) / 1000) : 0)
+    // Freeze elapsed time before sending stop (use ref to avoid stale closure)
+    const t0 = startTimeRef.current
+    setStoppedElapsed(t0 ? Math.round((Date.now() - t0) / 1000) : 0)
     await invoke('uitest_stop', {})
     showNotif('success', '已发送停止信号')
     stopPoll()
@@ -282,7 +291,7 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
 
   const running = status?.running ?? false
   const elapsed = running
-    ? (status?.startTime ? Math.round((Date.now() - status.startTime) / 1000) : 0)
+    ? (startTimeRef.current ? Math.round((Date.now() - startTimeRef.current) / 1000) : 0)
     : stoppedElapsed
   const elapsedStr = (running || stoppedElapsed > 0) ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : '—'
   const statusColor = running ? '#4fc3f7'
@@ -699,10 +708,29 @@ steps:                 # 步骤列表 (每个以 - name: 开头)
             <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <FileText size={14} /> 测试报告
             </span>
-            <button className="btn btn-sm btn-secondary" onClick={loadReports}
-              style={{ padding: '2px 8px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 3 }}>
-              <RefreshCw size={10} /> 刷新
-            </button>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {reports.length > 0 && (
+                <button className="btn btn-sm"
+                  onClick={async () => {
+                    const ok = confirm(`确认删除全部 ${reports.length} 个报告?`)
+                    if (!ok) return
+                    let deleted = 0
+                    for (const r of reports) {
+                      const res = await invoke<{success:boolean}>('uitest_delete_report', { reportPath: r.path })
+                      if (res?.success) deleted++
+                    }
+                    showNotif('success', `已删除 ${deleted}/${reports.length} 个报告`)
+                    loadReports()
+                  }}
+                  style={{ padding: '3px 10px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 3, background: 'rgba(233,69,96,0.08)', border: '1px solid rgba(233,69,96,0.3)', color: '#e94560', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>
+                  <Trash2 size={10} /> 全部删除
+                </button>
+              )}
+              <button className="btn btn-sm btn-secondary" onClick={loadReports}
+                style={{ padding: '2px 8px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 3 }}>
+                <RefreshCw size={10} /> 刷新
+              </button>
+            </div>
           </div>
           {reports.length === 0 ? (
             <div style={{ padding: '24px 0', color: 'var(--text-muted)', fontSize: 13, textAlign: 'center' }}>
@@ -729,6 +757,21 @@ steps:                 # 步骤列表 (每个以 - name: 开头)
                   onClick={() => invoke('uitest_open_report', { reportPath: r.path })}
                   style={{ padding: '4px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
                   <ExternalLink size={11} /> 打开报告
+                </button>
+                <button className="btn btn-sm"
+                  onClick={async () => {
+                    const ok = confirm(`确认删除报告: ${r.name}?`)
+                    if (!ok) return
+                    const res = await invoke<{success:boolean;error?:string}>('uitest_delete_report', { reportPath: r.path })
+                    if (res?.success) {
+                      showNotif('success', '已删除')
+                      loadReports()
+                    } else {
+                      showNotif('error', res?.error || '删除失败')
+                    }
+                  }}
+                  style={{ padding: '4px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, background: 'rgba(233,69,96,0.08)', border: '1px solid rgba(233,69,96,0.3)', color: '#e94560', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>
+                  <X size={11} /> 删除
                 </button>
               </div>
             ))

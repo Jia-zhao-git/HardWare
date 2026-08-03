@@ -32,6 +32,7 @@ const testState = {
     cycles: 0,
     lastStatus: 'idle',
     stoppedByUser: false,  // prevent duplicate uitest_done
+    preExistingRunDirs: new Set(),  // run dirs that existed before current session
 };
 
 function addLog(line) {
@@ -98,6 +99,16 @@ async function uitest_start(event, { serial, testFile, loops, durationMin }) {
 
     testState.running    = true;
     testState.stoppedByUser = false;
+
+    // Snapshot existing run dirs so stop-report only includes this session's cycles
+    testState.preExistingRunDirs = new Set(
+        fs.existsSync(RUNS_DIR)
+            ? fs.readdirSync(RUNS_DIR).filter(f => {
+                const p = path.join(RUNS_DIR, f, 'run.json');
+                return fs.existsSync(p);
+              })
+            : []
+    );
     testState.serial     = serial;
     testState.proc       = proc;
     testState.startTime  = Date.now();
@@ -183,10 +194,11 @@ async function uitest_stop(event, {}) {
 // --------------------------------------------------------------------------
 function _generate_report_from_runs(win) {
     if (!fs.existsSync(RUNS_DIR)) return;
-    const runDirs = fs.readdirSync(RUNS_DIR)
+    const allDirs = fs.readdirSync(RUNS_DIR)
         .filter(f => { const p = path.join(RUNS_DIR, f, 'run.json'); return fs.existsSync(p); })
-        .sort()
-        .slice(-100);  // last 100 runs max
+        .sort();
+    // Only include runs created during this session
+    const runDirs = allDirs.filter(d => !testState.preExistingRunDirs.has(d)).slice(-100);
     if (runDirs.length < 1) return;
 
     // Read all run.json files
@@ -354,6 +366,28 @@ async function uitest_open_report(event, { reportPath }) {
 }
 
 // --------------------------------------------------------------------------
+// uitest_delete_report  — delete a summary report file
+// --------------------------------------------------------------------------
+async function uitest_delete_report(event, { reportPath }) {
+    try {
+        if (!fs.existsSync(reportPath)) return { success: false, error: 'File not found' };
+        // Security: only allow deleting summary-*.html or run directories under RUNS_DIR
+        const p = path.resolve(reportPath);
+        const runsDir = path.resolve(RUNS_DIR);
+        if (!p.startsWith(runsDir)) return { success: false, error: 'Invalid path' };
+        const stat = fs.statSync(p);
+        if (stat.isDirectory()) {
+            fs.rmSync(p, { recursive: true, force: true });
+        } else {
+            fs.unlinkSync(p);
+        }
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: String(e) };
+    }
+}
+
+// --------------------------------------------------------------------------
 // uitest_list_tests  — list .yaml files in tests/
 // --------------------------------------------------------------------------
 async function uitest_list_tests(event, {}) {
@@ -460,6 +494,7 @@ function register(ipcMain) {
     ipcMain.handle('uitest_status',       uitest_status);
     ipcMain.handle('uitest_list_reports', uitest_list_reports);
     ipcMain.handle('uitest_open_report',  uitest_open_report);
+    ipcMain.handle('uitest_delete_report',uitest_delete_report);
     ipcMain.handle('uitest_list_tests',   uitest_list_tests);
     ipcMain.handle('uitest_get_logs',     uitest_get_logs);
     ipcMain.handle('uitest_read_test',    uitest_read_test);

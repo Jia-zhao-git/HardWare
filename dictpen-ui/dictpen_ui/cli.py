@@ -167,7 +167,7 @@ def cmd_calibrate(args) -> int:
 
 
 def _prune_runs(runs_dir: Path, keep: int) -> None:
-    """Delete oldest run directories, keeping `keep` most recent."""
+    """Delete oldest run directories and stale summary HTML, keeping `keep` most recent."""
     dirs = sorted(
         (d for d in runs_dir.iterdir() if d.is_dir() and (d / "run.json").exists()),
         key=lambda d: d.name,
@@ -176,6 +176,13 @@ def _prune_runs(runs_dir: Path, keep: int) -> None:
         try:
             import shutil
             shutil.rmtree(old, ignore_errors=True)
+        except Exception:
+            pass
+    # Also prune old summary-*.html files (keep at most keep*2)
+    summaries = sorted(runs_dir.glob("summary-*.html"), key=lambda p: p.name, reverse=True)
+    for old_sum in summaries[keep * 2:]:
+        try:
+            old_sum.unlink(missing_ok=True)
         except Exception:
             pass
 
