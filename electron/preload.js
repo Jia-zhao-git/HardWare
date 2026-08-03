@@ -43,4 +43,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('script_done', listener);
         return () => ipcRenderer.removeListener('script_done', listener);
     },
+    // UI Test events
+    onUitestLog: (callback) => {
+        const listener = (event, data) => callback(data);
+        ipcRenderer.on('uitest_log', listener);
+        return () => ipcRenderer.removeListener('uitest_log', listener);
+    },
+    onUitestDone: (callback) => {
+        const listener = (event, data) => callback(data);
+        ipcRenderer.on('uitest_done', listener);
+        return () => ipcRenderer.removeListener('uitest_done', listener);
+    },
 });

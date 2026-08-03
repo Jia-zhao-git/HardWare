@@ -1,0 +1,233 @@
+# DictPen Test Case Templates
+# Each template describes a reusable test structure.
+# Select one in the editor to create a new test file.
+
+templates:
+  - name: blank_test
+    label: Blank Test
+    description: Start from scratch
+    content: |
+      name: my_test
+      on_failure:
+        stop: true
+      steps:
+        - name: return_home
+          action: press_key
+          key: asr
+          wait: 1.0
+          capture: home
+
+        - name: launch_app
+          action: shell
+          command: miniapp_cli start <APPID>
+          wait: 2.5
+          capture: app_entered
+
+        - name: assert_launched
+          action: assert
+          screen_changed_from: home
+          current: app_entered
+
+  - name: app_smoke
+    label: Single App Smoke
+    description: Launch one app, verify, scroll, exit
+    content: |
+      name: app_smoke
+      on_failure:
+        stop: true
+      steps:
+        - name: return_home
+          action: press_key
+          key: asr
+          wait: 1.0
+          capture: home
+
+        - name: launch
+          action: shell
+          command: miniapp_cli start <APPID>
+          wait: 2.5
+          capture: enter
+
+        - name: assert_launched
+          action: assert
+          screen_changed_from: home
+          current: enter
+
+        - name: assert_not_blank
+          action: assert
+          capture_not_blank: enter
+          min_kb: 3
+
+        - name: random_tap
+          action: random_tap
+          count: 3
+          wait: 0.5
+          capture: after_taps
+
+        - name: exit
+          action: press_key
+          key: asr
+          wait: 0.5
+          capture: after_exit
+
+        - name: assert_exit
+          action: assert
+          screen_changed_from: enter
+          current: after_exit
+
+        - name: proc_snapshot
+          action: proc_snapshot
+          label: done
+
+  - name: multi_app
+    label: Multi-App Cycle
+    description: Launch several apps in sequence
+    content: |
+      name: multi_app_cycle
+      on_failure:
+        stop: false
+      steps:
+        - name: go_home
+          action: press_key
+          key: asr
+          wait: 1.0
+          capture: home
+
+        - name: app1
+          action: shell
+          command: miniapp_cli start <APPID_1>
+          wait: 2.5
+          capture: app1
+
+        - name: assert_app1
+          action: assert
+          screen_changed_from: home
+          current: app1
+
+        - name: exit1
+          action: press_key
+          key: asr
+          wait: 0.5
+
+        - name: app2
+          action: shell
+          command: miniapp_cli start <APPID_2>
+          wait: 2.5
+          capture: app2
+
+        - name: assert_app2
+          action: assert
+          screen_changed_from: app1
+          current: app2
+
+        - name: shuffle_in_app2
+          action: shuffle
+          n: 3
+          wait: 0.5
+          capture: app2_shuffled
+
+        - name: exit2
+          action: press_key
+          key: asr
+          wait: 0.5
+
+        - name: proc_ok
+          action: assert
+          proc_alive:
+            - miniapp
+            - runDictPen
+
+  - name: memory_track
+    label: Memory Tracking
+    description: Launch+exit repeatedly with memory assertions
+    content: |
+      name: memory_track
+      on_failure:
+        stop: false
+      steps:
+        - name: home
+          action: press_key
+          key: asr
+          wait: 1.0
+          capture: home
+
+        - name: launch_heavy_app
+          action: shell
+          command: miniapp_cli start <APPID>
+          wait: 3.0
+          capture: app_loaded
+
+        - name: assert_not_blank
+          action: assert
+          capture_not_blank: app_loaded
+          min_kb: 3
+
+        - name: shuffle_it
+          action: shuffle
+          n: 5
+          wait: 1.0
+          capture: shuffled
+
+        - name: exit_app
+          action: press_key
+          key: asr
+          wait: 0.8
+
+        - name: memory_check
+          action: assert
+          mem_delta_ok: -15
+
+        - name: procs_ok
+          action: assert
+          proc_alive:
+            - miniapp
+            - runDictPen
+
+  - name: edge_cases
+    label: Edge Cases
+    description: Edge swipes, long press, boundary taps
+    content: |
+      name: edge_cases
+      on_failure:
+        stop: true
+      steps:
+        - name: go_home
+          action: press_key
+          key: asr
+          wait: 1.0
+          capture: home
+
+        - name: edge_swipe_top
+          action: edge_swipe
+          edge: top
+          wait: 0.8
+          capture: after_top_edge
+
+        - name: home_again
+          action: press_key
+          key: asr
+          wait: 0.5
+
+        - name: long_press_center
+          action: long_press
+          sx: 85
+          sy: 280
+          duration_ms: 1000
+          wait: 0.8
+          capture: after_long_press
+
+        - name: exit_longpress
+          action: press_key
+          key: asr
+          wait: 0.5
+
+        - name: random_swipe_mix
+          action: random_swipe
+          count: 4
+          wait: 0.8
+          capture: after_random_swipes
+
+        - name: not_blank
+          action: assert
+          capture_not_blank: after_random_swipes
+          min_kb: 2

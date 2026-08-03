@@ -1,0 +1,14 @@
+sku: OVERHEAD_Y18_SKU_CHN_PLUS
+screenshot_size: [936, 280]
+coordinate_mode: screen
+pages:
+  home:
+    entries:
+      wordbook:
+        label: 单词本
+        point: [468, 140]
+        confidence: provisional_manual
+      center:
+        label: 屏幕中心
+        point: [468, 140]
+        confidence: provisional_manual

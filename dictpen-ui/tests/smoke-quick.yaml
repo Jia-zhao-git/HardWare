@@ -1,0 +1,68 @@
+# Quick smoke test — 3 core apps, ~60s
+# For checking basic device health before a long run
+
+name: smoke_quick
+on_failure:
+  stop: true
+steps:
+  - name: return_home
+    action: press_key
+    key: asr
+    wait: 1.0
+    capture: home
+
+  - name: launch_settings
+    action: shell
+    command: miniapp_cli start 8080272425914438
+    wait: 2.5
+    capture: settings
+
+  - name: assert_settings_launched
+    action: assert
+    screen_changed_from: home
+    current: settings
+
+  - name: scroll_in_settings
+    action: shell
+    command: send_event touch press 280 34; send_event touch slip 280 59; send_event touch slip 280 84; send_event touch slip 280 109; send_event touch slip 280 136; send_event touch release
+    wait: 0.8
+    capture: settings_scrolled
+
+  - name: exit_settings
+    action: press_key
+    key: asr
+    wait: 0.8
+    capture: back_from_settings
+
+  - name: launch_wordbook
+    action: shell
+    command: miniapp_cli start 8080212246010681
+    wait: 2.5
+    capture: wordbook
+
+  - name: assert_wordbook_launched
+    action: assert
+    screen_changed_from: back_from_settings
+    current: wordbook
+
+  - name: exit_wordbook
+    action: press_key
+    key: asr
+    wait: 0.8
+    capture: back_from_wordbook
+
+  - name: launch_history
+    action: shell
+    command: miniapp_cli start 8080292157485624
+    wait: 2.5
+    capture: history
+
+  - name: assert_history_launched
+    action: assert
+    screen_changed_from: back_from_wordbook
+    current: history
+
+  - name: final_check_no_crash
+    action: assert
+    capture_not_blank: history
+    min_kb: 2

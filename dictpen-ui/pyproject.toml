@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dictpen-ui"
+version = "0.1.0"
+description = "ADB-based UI automation for Youdao Dictionary Pen"
+requires-python = ">=3.11"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dictpen_ui*"]

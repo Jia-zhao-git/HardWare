@@ -17,6 +17,8 @@ export interface ElectronAPI {
   onAuthDeviceInfoRefresh: (callback: (data: { serial: string }) => void) => () => void
   onScriptOutput: (callback: (data: { serial: string; line: string; type?: 'info' | 'error'; lines: string[] }) => void) => () => void
   onScriptDone: (callback: (data: { serial: string; code: number; lines: string[] }) => void) => () => void
+  onUitestLog: (callback: (data: { line: string }) => void) => () => void
+  onUitestDone: (callback: (data: { code: number; cycles: number; summaryReport: string | null; lastStatus: string }) => void) => () => void
 }
 
 declare global {

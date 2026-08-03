@@ -1,0 +1,134 @@
+name: stress_rapid_launch
+# Rapid launch/exit cycles — stress test for app lifecycle
+# 12 rapid launches per cycle, ~90s
+on_failure:
+  stop: false
+steps:
+  - name: home_init
+    action: press_key
+    key: asr
+    wait: 1.0
+    capture: home
+
+  # Rapid: launch → brief wait → exit (no scroll/shuffle)
+  # Target: fast memory churn
+  - name: rapid1_settings
+    action: shell
+    command: miniapp_cli start 8080272425914438
+    wait: 1.0
+  - name: exit1
+    action: press_key
+    key: asr
+    wait: 0.3
+
+  - name: rapid2_wordbook
+    action: shell
+    command: miniapp_cli start 8080212246010681
+    wait: 1.0
+  - name: exit2
+    action: press_key
+    key: asr
+    wait: 0.3
+
+  - name: rapid3_history
+    action: shell
+    command: miniapp_cli start 8080292157485624
+    wait: 1.0
+  - name: exit3
+    action: press_key
+    key: asr
+    wait: 0.3
+
+  - name: rapid4_textbook
+    action: shell
+    command: miniapp_cli start 8080212335092787
+    wait: 1.0
+  - name: exit4
+    action: press_key
+    key: asr
+    wait: 0.3
+
+  - name: rapid5_dict
+    action: shell
+    command: miniapp_cli start 8080252464522508
+    wait: 1.0
+  - name: exit5
+    action: press_key
+    key: asr
+    wait: 0.3
+
+  - name: rapid6_store
+    action: shell
+    command: miniapp_cli start 8001657592345846
+    wait: 1.0
+  - name: exit6
+    action: press_key
+    key: asr
+    wait: 0.3
+
+  - name: rapid7_listening
+    action: shell
+    command: miniapp_cli start 8080232418330628
+    wait: 1.0
+  - name: exit7
+    action: press_key
+    key: asr
+    wait: 0.3
+
+  - name: rapid8_reciter
+    action: shell
+    command: miniapp_cli start 8001725935438060
+    wait: 1.0
+  - name: exit8
+    action: press_key
+    key: asr
+    wait: 0.3
+
+  - name: rapid9_ai
+    action: shell
+    command: miniapp_cli start 8001699004677776
+    wait: 1.0
+  - name: exit9
+    action: press_key
+    key: asr
+    wait: 0.3
+
+  - name: rapid10_voice
+    action: shell
+    command: miniapp_cli start 8080272808953200
+    wait: 1.0
+  - name: exit10
+    action: press_key
+    key: asr
+    wait: 0.3
+
+  - name: rapid11_xmla
+    action: shell
+    command: miniapp_cli start 8080292001695606
+    wait: 1.0
+  - name: exit11
+    action: press_key
+    key: asr
+    wait: 0.3
+
+  - name: rapid12_spell
+    action: shell
+    command: miniapp_cli start 8080262605498742
+    wait: 1.0
+
+  - name: final_home
+    action: press_key
+    key: asr
+    wait: 0.5
+    capture: home_final
+
+  - name: assert_not_blank
+    action: assert
+    capture_not_blank: home_final
+    min_kb: 2
+
+  - name: procs_alive
+    action: assert
+    proc_alive:
+      - miniapp
+      - runDictPen

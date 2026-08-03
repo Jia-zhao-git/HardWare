@@ -20,6 +20,7 @@ const stability = require('./modules/stability');
 const tools = require('./modules/tools');
 const window = require('./modules/window');
 const update = require('./modules/update');
+const uitest = require('./modules/uitest');
 
 // ============================================================================
 // Shared state
@@ -229,8 +230,7 @@ function registerMiscHandlers() {
             if (!fs.existsSync(normalizedPath)) {
                 fs.mkdirSync(normalizedPath, { recursive: true });
             }
-            // 使用 explorer 直接打开目录，最可靠的方式
-            const { exec } = require('child_process');
+            // 使用 explorer 直接打开目录，最可靠的方�?            const { exec } = require('child_process');
             exec(`explorer "${normalizedPath}"`);
             return { success: true };
         } catch (e) {
@@ -266,6 +266,7 @@ function registerAllHandlers() {
     registerStabilityHandlers();
     registerMiscHandlers();
     registerWindowHandlers();
+    uitest.register(ipcMain);
 }
 
 // ============================================================================

@@ -1,0 +1,19 @@
+name: basic_smoke
+on_failure:
+  stop: true
+steps:
+  - name: 回到桌面
+    action: press_key
+    key: asr
+    wait: 1
+    capture: home
+  - name: 点击屏幕中心
+    action: tap_ui
+    page: home
+    target: center
+    wait: 1
+    capture: after_center_tap
+  - name: 验证截图文件存在
+    action: assert
+    screen_changed_from: home
+    current: after_center_tap

@@ -1,0 +1,88 @@
+name: memory_stress
+# Repeatedly launch heavy apps, checking for memory leaks
+# Run with: --loop 0 --duration 120 (2 hours)
+on_failure:
+  stop: false
+steps:
+  - name: home_start
+    action: press_key
+    key: asr
+    wait: 1.0
+    capture: home
+
+  # App 1: 有道词典 (heavy, loads network content)
+  - name: launch_dict
+    action: shell
+    command: miniapp_cli start 8080252464522508
+    wait: 3.0
+    capture: dict
+
+  - name: assert_dict_ok
+    action: assert
+    screen_changed_from: home
+    current: dict
+
+  - name: shuffle_dict
+    action: shuffle
+    n: 3
+    wait: 1.0
+    capture: dict_shuffled
+
+  - name: exit_dict
+    action: press_key
+    key: asr
+    wait: 0.8
+    capture: back_dict
+
+  # App 2: 喜马拉雅少儿 (media, heavy)
+  - name: launch_xmla
+    action: shell
+    command: miniapp_cli start 8080292001695606
+    wait: 3.0
+    capture: xmla
+
+  - name: assert_xmla_ok
+    action: assert
+    screen_changed_from: back_dict
+    current: xmla
+
+  - name: scroll_xmla
+    action: shell
+    command: send_event touch press 280 34; send_event touch slip 280 59; send_event touch slip 280 84; send_event touch slip 280 109; send_event touch slip 280 136; send_event touch release
+    wait: 0.8
+    capture: xmla_scrolled
+
+  - name: exit_xmla
+    action: press_key
+    key: asr
+    wait: 0.8
+    capture: back_xmla
+
+  # App 3: 有道云盘 (requires login/wifi, but launch test)
+  - name: launch_yundisk
+    action: shell
+    command: miniapp_cli start 8001667273038889
+    wait: 3.0
+    capture: yundisk
+
+  - name: assert_yundisk_ok
+    action: assert
+    screen_changed_from: back_xmla
+    current: yundisk
+
+  - name: exit_yundisk
+    action: press_key
+    key: asr
+    wait: 0.5
+    capture: back_from_yundisk
+
+  # Memory check — fail if available dropped > 20MB
+  - name: memory_check_cycle
+    action: assert
+    mem_delta_ok: -20
+
+  - name: procs_ok
+    action: assert
+    proc_alive:
+      - miniapp
+      - runDictPen

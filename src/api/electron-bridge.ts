@@ -130,3 +130,17 @@ export function onScriptOutput(callback: (data: ScriptOutputData) => void): () =
 export function onScriptDone(callback: (data: ScriptDoneData) => void): () => void {
   return window.electronAPI.onScriptDone(callback);
 }
+
+// UI Automation Test
+export interface UitestLogData { line: string }
+export interface UitestDoneData { code: number; cycles: number; summaryReport: string | null; lastStatus: string }
+export interface UitestStatus { running: boolean; serial: string | null; startTime: number | null; cycles: number; lastStatus: string; summaryReport: string | null; logCount: number; recentLogs: string[] }
+export interface UitestReport { name: string; path: string; mtime: string }
+export interface UitestTestFile { name: string; path: string }
+
+export function onUitestLog(callback: (data: UitestLogData) => void): () => void {
+  return window.electronAPI.onUitestLog(callback);
+}
+export function onUitestDone(callback: (data: UitestDoneData) => void): () => void {
+  return window.electronAPI.onUitestDone(callback);
+}

@@ -12,6 +12,7 @@ import ShellPage from './pages/ShellPage'
 import AppPage from './pages/AppPage'
 import ScriptEditorPage from './pages/ScriptEditorPage'
 import TestPage from './pages/TestPage'
+import UiTestPage from './pages/UiTestPage'
 import ToolsPage from './pages/ToolsPage'
 import FileManagerPage from './pages/FileManagerPage'
 import HistoryPage from './pages/HistoryPage'
@@ -38,7 +39,7 @@ type ProcessInfo = {
   threads?: number
 }
 
-type Page = 'device' | 'perf' | 'shell' | 'app' | 'script' | 'test' | 'tools' | 'files' | 'history'
+type Page = 'device' | 'perf' | 'shell' | 'app' | 'script' | 'test' | 'uitest' | 'tools' | 'files' | 'history'
 
 const NAV_ITEMS = [
   { id: 'device' as Page, label: '设备管理', icon: Smartphone, shortcut: '1', color: '#00d4ff', desc: '连接设备、查看详情' },
@@ -48,6 +49,7 @@ const NAV_ITEMS = [
   { id: 'files' as Page, label: '文件管理', icon: FolderOpen, shortcut: '5', color: '#8b5cf6', desc: '浏览设备文件系统' },
   { id: 'script' as Page, label: '脚本编辑', icon: FileCode, shortcut: '6', color: '#ef4444', desc: '可视化脚本编辑与执行' },
   { id: 'test' as Page, label: '测试套件', icon: FlaskConical, shortcut: '7', color: '#ec4899', desc: '稳定性、功耗测试' },
+  { id: 'uitest' as Page, label: 'UI 自动化', icon: Activity, shortcut: '0', color: '#e94560', desc: 'UI 自动化测试，点击即运行' },
   { id: 'tools' as Page, label: '工具箱', icon: Wrench, shortcut: '8', color: '#06b6d4', desc: '截图、WiFi、固件等工具' },
   { id: 'history' as Page, label: '历史记录', icon: History, shortcut: '9', color: '#64748b', desc: '操作历史' },
 ]
@@ -481,6 +483,7 @@ function App() {
             {activePage === 'app' && <AppPage {...pageProps} />}
             {activePage === 'script' && <ScriptEditorPage {...pageProps} />}
             {activePage === 'test' && <TestPage {...pageProps} />}
+            {activePage === 'uitest' && <UiTestPage selectedDevice={selectedDevice} showNotif={showNotif} />}
             {activePage === 'tools' && <ToolsPage {...pageProps} />}
             {activePage === 'files' && <FileManagerPage {...pageProps} />}
             {activePage === 'history' && <HistoryPage />}

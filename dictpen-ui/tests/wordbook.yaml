@@ -1,0 +1,19 @@
+name: wordbook_smoke
+on_failure:
+  stop: true
+steps:
+  - name: 回到桌面
+    action: press_key
+    key: asr
+    wait: 1
+    capture: home
+  - name: 点击单词本
+    action: tap_ui
+    page: home
+    target: wordbook
+    wait: 1
+    capture: after_tap_wordbook
+  - name: 验证页面发生变化
+    action: assert
+    screen_changed_from: home
+    current: after_tap_wordbook

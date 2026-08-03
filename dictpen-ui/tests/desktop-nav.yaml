@@ -1,0 +1,46 @@
+name: desktop_navigation
+# Test desktop page navigation (left/right swipe between pages)
+on_failure:
+  stop: true
+steps:
+  - name: go_home
+    action: press_key
+    key: asr
+    wait: 1.0
+    capture: page1
+
+  - name: swipe_left_next_page
+    action: shell
+    command: send_event touch press 280 34; send_event touch slip 280 59; send_event touch slip 280 84; send_event touch slip 280 109; send_event touch slip 280 136; send_event touch release
+    wait: 0.8
+    capture: page2
+
+  - name: assert_page_changed
+    action: assert
+    screen_changed_from: page1
+    current: page2
+
+  - name: swipe_right_prev_page
+    action: shell
+    command: send_event touch press 280 136; send_event touch slip 280 109; send_event touch slip 280 84; send_event touch slip 280 58; send_event touch slip 280 34; send_event touch release
+    wait: 0.8
+    capture: back_to_page1
+
+  - name: assert_back_to_original
+    action: assert
+    warn_only: true
+    screen_changed_from: page2
+    current: back_to_page1
+
+  - name: long_press_desktop
+    action: long_press
+    sx: 85
+    sy: 280
+    duration_ms: 800
+    wait: 0.8
+    capture: after_long_press
+
+  - name: exit_long_press
+    action: press_key
+    key: asr
+    wait: 0.5
