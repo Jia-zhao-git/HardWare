@@ -64,6 +64,7 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
   const [editDirty, setEditDirty] = useState(false)
   const [editLoading, setEditLoading] = useState(false)
   const [genLoading, setGenLoading] = useState(false)
+  const [calibLoading, setCalibLoading] = useState(false)
   const [templates, setTemplates] = useState<Template[]>([])
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [validateMsg, setValidateMsg] = useState<string | null>(null)
@@ -272,6 +273,25 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
     }
   }
 
+  const runCalibrate = async () => {
+    if (!selectedDevice) { showNotif('warning', '请先连接设备'); return }
+    setCalibLoading(true)
+    setActiveTab('run')
+    setLogs(prev => [...prev, '[CALIB] 开始快速校准，预计耗时60秒，请保持设备连接并保持在主界面...'])
+    const r = await invoke<{ success: boolean; calibrated?: boolean; sku?: string; note?: string; error?: string }>(
+      'uitest_calibrate', { serial: selectedDevice }
+    )
+    setCalibLoading(false)
+    if (r?.calibrated) {
+      showNotif('success', `校准完成: ${r.sku} 已保存`)
+      setLogs(prev => [...prev, `[CALIB] 成功！校准文件已保存: ui-map/${r.sku}.json (note: ${r.note || ''})`])
+    } else if (r?.success === false) {
+      showNotif('error', r.error || '校准失败')
+    } else {
+      showNotif('warning', `校准完成，但未找到相交点，已使用 cfg.json 默认内容保存 (note: ${r?.note || ''})`)
+    }
+  }
+
   const runGen = async () => {
     if (!selectedDevice) { showNotif('warning', '请先连接设备'); return }
     setGenLoading(true)
@@ -389,6 +409,12 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
                     style={{ padding: '0 10px', display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
                     {genLoading ? <Loader size={12} className="spinning" /> : <RotateCcw size={12} />}
                     重新生成
+                  </button>
+                  <button className="btn btn-sm btn-secondary" onClick={runCalibrate} disabled={calibLoading || running}
+                    title="快速校准坐标映射（约 60 秒）— 用于新 SKU 或首次连接"
+                    style={{ padding: '0 10px', display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
+                    {calibLoading ? <Loader size={12} className="spinning" /> : <Settings size={12} />}
+                    校准
                   </button>
                 </div>
               </div>

@@ -1,46 +1,31 @@
 #!/usr/bin/env python3
 """
-Auto-calibrate touch coordinate mapping for ANY DictPen SKU.
+Fast touch coordinate calibration for DictPen devices.
 
-How it works:
-  1. Reads cfg.json (screen width/height, direction, tp_direction)
-  2. Opens a known "rich" app (settings) that has tappable items
-  3. Systematically taps a grid of test points across the device's touch space
-  4. For each point: captures before/after screenshots
-  5. If screenshot changes, the point is "hot" (hit a UI element)
-  6. From the pattern of hot points, derives:
-     - Touch X/Y range (actual min/max that produce hits)
-     - Touch-to-screenshot axis mapping (which touch axis = which screen axis)
-     - Touch-to-screenshot direction (is it inverted?)
-  7. Saves calibration to ui-map/<sku>.yaml
+Old approach: grid scan with app re-launch per point (~7 min).
+New approach:
+  1. Launch settings app ONCE.
+  2. Fire a dense row of taps along X and Y axes (no re-launch).
+  3. Capture screenshots before each row and compare.
+  4. Derive effective touch range from first/last hit positions.
+  5. Save calibration file.
 
-Usage:
-  python -m dictpen_ui.cli calibrate --serial <serial>
+Typical runtime: < 60 seconds.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sys
 import time
 from pathlib import Path
 
-# ── imports from our package ──
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from dictpen_ui.adb import Adb
 from dictpen_ui.device import DictPenDevice
-from dictpen_ui.screenshot import ScreenshotDriver
-
-
-def sha256_file(p: Path) -> str:
-    h = hashlib.sha256()
-    with p.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
+from dictpen_ui.screenshot import ScreenshotDriver, sha256_file
 
 
 def calibrate(serial: str, adb_path: str = "adb") -> dict:
@@ -58,139 +43,122 @@ def calibrate(serial: str, adb_path: str = "adb") -> dict:
     tp_yoff = sc.tp_yoffset or 0
     sku = info.sku or "unknown"
 
-    print(f"Device: {sku}")
-    print(f"  Screen: {phys_w}x{phys_h}  dir={direction}  tp_dir={tp_dir}")
-    print(f"  Touch offset: ({tp_xoff},{tp_yoff})")
+    print(json.dumps({"step": "init", "sku": sku, "phys_w": phys_w, "phys_h": phys_h,
+                      "direction": direction, "tp_direction": tp_dir}, ensure_ascii=False), flush=True)
 
-    # ── Step 1: launch settings app (has menu items to tap) ──
-    print("\n--- Step 1: Launch settings app for calibration ---")
-    # Settings appid is common across SKUs; verify availability
-    adb.shell("send_event asr press; sleep 0.1; send_event asr release", check=False)
-    time.sleep(0.6)
-    adb.shell("miniapp_cli start 8080272425914438", timeout=15)
-    time.sleep(2.5)
-
-    tmp_dir = Path(ROOT) / "runs" / "calib_tmp"
+    tmp_dir = ROOT / "runs" / "calib_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    # Verify app launched
-    shots.capture(tmp_dir / "baseline.png")
-    baseline_hash = sha256_file(tmp_dir / "baseline.png")
-    print(f"  Baseline size: {(tmp_dir / 'baseline.png').stat().st_size} bytes")
+    # ── Step 1: go home, launch settings app ──
+    print(json.dumps({"step": "launch_app"}), flush=True)
+    adb.shell("send_event asr press; sleep 0.1; send_event asr release", check=False)
+    time.sleep(0.8)
+    adb.shell("miniapp_cli start 8080272425914438 2>/dev/null || true", timeout=15, check=False)
+    time.sleep(2.5)
 
-    # ── Step 2: discover touch range ──
-    # Strategy: binary search along X axis to find min/max bounds
-    # where touches produce screenshot changes in settings app
-    print("\n--- Step 2: Discover touch X range ---")
-    
-    def test_point(tx: int, ty: int) -> bool:
-        """Tap (tx,ty), return True if screenshot changed."""
-        adb.shell("miniapp_cli start 8080272425914438", timeout=10, check=False)
-        time.sleep(2.0)
-        shots.capture(tmp_dir / "pre.png")
-        pre_hash = sha256_file(tmp_dir / "pre.png")
+    # baseline screenshot
+    baseline = tmp_dir / "baseline.png"
+    shots.capture(baseline)
+    baseline_hash = sha256_file(baseline)
+    baseline_size = baseline.stat().st_size
+    print(json.dumps({"step": "baseline", "size": baseline_size, "hash": baseline_hash[:8]}), flush=True)
+
+    if baseline_size < 1000:
+        print(json.dumps({"step": "error", "msg": "Baseline screenshot too small — device may be off or disconnected"}), flush=True)
+        return _fallback(sku, phys_w, phys_h, direction, tp_dir, tp_xoff, tp_yoff, "baseline_failed")
+
+    # ── Step 2: fast tap scan — NO app re-launch between points ──
+    # After each tap, take screenshot and compare to the one BEFORE that tap.
+    # A "hit" means the tap triggered a UI change.
+
+    def tap_and_check(tx: int, ty: int, prev_hash: str) -> tuple[bool, str]:
+        """Fire a tap, return (hit, new_hash)."""
         adb.shell(
-            f"send_event touch press {tx} {ty}; sleep 0.12; send_event touch release",
-            timeout=10,
+            f"send_event touch press {tx} {ty}; sleep 0.10; send_event touch release",
+            timeout=8, check=False,
         )
-        time.sleep(0.6)
-        shots.capture(tmp_dir / "post.png")
-        post_hash = sha256_file(tmp_dir / "post.png")
-        return pre_hash != post_hash
+        time.sleep(0.35)
+        p = tmp_dir / "probe.png"
+        shots.capture(p)
+        h = sha256_file(p)
+        return h != prev_hash, h
 
-    # Find the effective X range where touches produce hits
-    # First try standard approach: tap along X at Y-mid with phys range
+    # ── Scan X axis (at Y = phys_h // 2) ──
+    print(json.dumps({"step": "scan_x", "y_fixed": phys_h // 2, "range": phys_w}), flush=True)
     y_mid = phys_h // 2
-    
-    print(f"  Scanning X axis (Y fixed at {y_mid})...")
-    found_x = []
-    step = max(1, phys_w // 15)
-    for x in range(0, phys_w, step):
-        hit = test_point(x, y_mid)
+    step_x = max(1, phys_w // 20)  # ~20 points across X
+    hits_x: list[int] = []
+    prev = sha256_file(baseline)
+
+    for x in range(0, phys_w, step_x):
+        hit, prev = tap_and_check(x, y_mid, prev)
         if hit:
-            found_x.append(x)
-            print(f"    X={x}: HIT")
-        # only print every 5th miss to reduce noise
-        elif x % (step * 5) == 0:
-            print(f"    X={x}: miss")
-    
-    # Also try swapped axis (touch Y = screen X?)
-    print(f"\n  Scanning Y axis (X fixed at {phys_w // 2}, varying Y)...")
+            hits_x.append(x)
+        print(json.dumps({"scan": "x", "x": x, "hit": hit}), flush=True)
+
+    # ── Scan Y axis (at X = phys_w // 2) ──
+    print(json.dumps({"step": "scan_y", "x_fixed": phys_w // 2, "range": phys_h}), flush=True)
     x_mid = phys_w // 2
-    found_y = []
-    step_y = max(1, phys_h // 10)
+    step_y = max(1, phys_h // 15)  # ~15 points across Y
+    hits_y: list[int] = []
+
     for y in range(0, phys_h, step_y):
-        hit = test_point(x_mid, y)
+        hit, prev = tap_and_check(x_mid, y, prev)
         if hit:
-            found_y.append(y)
-            print(f"    Y={y}: HIT")
-    
-    # ── Step 3: if standard range failed, try extended range ──
-    extended_ranges = [1024, 2048, 4096]
-    if not found_x:
-        print("\n  Standard range failed. Trying extended ranges...")
-        for ext_w in extended_ranges:
-            print(f"  Trying {ext_w}x{phys_h if phys_h >= ext_w//6 else ext_w//6}...")
-            sub_found = []
-            for x in range(0, ext_w, max(1, ext_w // 20)):
-                hit = test_point(x, ext_w // 12)
-                if hit:
-                    sub_found.append(x)
-                    print(f"    ext X={x}: HIT (range {ext_w})")
-                    break
-            if sub_found:
-                found_x = sub_found
-                phys_w = ext_w
-                break
-    
-    if not found_x:
-        # Last resort: use symmetrical range
-        print("\n  All ranges failed. Using standard cfg.json values with direct mapping.")
-        result = {
-            "sku": sku,
-            "phys_w": phys_w, "phys_h": phys_h,
-            "direction": direction, "tp_direction": tp_dir,
-            "tp_xoffset": tp_xoff, "tp_yoffset": tp_yoff,
-            "calibrated": False,
-            "mapping": "direct",
-        }
-        return result
+            hits_y.append(y)
+        print(json.dumps({"scan": "y", "y": y, "hit": hit}), flush=True)
 
-    x_min = min(found_x)
-    x_max = max(found_x)
-    y_min = min(found_y) if found_y else 0
-    y_max = max(found_y) if found_y else phys_h
+    print(json.dumps({"step": "scan_done", "hits_x": hits_x, "hits_y": hits_y}), flush=True)
 
-    print(f"\n  Touch X range: {x_min}-{x_max} (span={x_max-x_min})")
-    print(f"  Touch Y range: {y_min}-{y_max} (span={y_max-y_min})")
+    # ── Step 3: decide calibration result ──
+    if not hits_x and not hits_y:
+        # Zero hits — likely app didn't launch or device is showing blank screen
+        # Fall back to cfg.json values (still better than nothing)
+        print(json.dumps({"step": "warn", "msg": "No hits found — using cfg.json defaults"}), flush=True)
+        return _save(sku, phys_w, phys_h, direction, tp_dir, tp_xoff, tp_yoff, calibrated=False, note="no_hits")
 
-    # ── Step 4: determine axis mapping ──
-    # Now we know X touch range. The question: which touch axis maps to 
-    # which screenshot axis, and in which direction?
-    # Strategy: tap at (x_min, y_mid) and (x_max, y_mid) — see where 
-    # on screenshot the change occurs by comparing screenshot hash patterns.
-    print("\n--- Step 4: Axis mapping ---")
-    print(f"  Touch frame: phys_w={phys_w}, phys_h={phys_h}")
-    print(f"  Touch range found: X={x_min}..{x_max}, Y={y_min}..{y_max}")
-    print(f"  Direction: screen={direction}, touch={tp_dir}")
+    # Compute effective touch offsets from hits
+    # If hits are shifted from [0, phys_w] we can estimate xoffset
+    x_min_hit = min(hits_x) if hits_x else 0
+    x_max_hit = max(hits_x) if hits_x else phys_w - 1
+    y_min_hit = min(hits_y) if hits_y else 0
+    y_max_hit = max(hits_y) if hits_y else phys_h - 1
 
+    # Derive offset: if first hit is far from 0, the touch panel has an offset
+    x_offset = x_min_hit if x_min_hit > phys_w * 0.1 else 0
+    y_offset = y_min_hit if y_min_hit > phys_h * 0.1 else 0
+
+    # Combine with existing cfg offsets
+    total_xoff = tp_xoff + x_offset
+    total_yoff = tp_yoff + y_offset
+
+    return _save(sku, phys_w, phys_h, direction, tp_dir, total_xoff, total_yoff,
+                 calibrated=True, note="fast_scan",
+                 touch_x_range=[x_min_hit, x_max_hit],
+                 touch_y_range=[y_min_hit, y_max_hit])
+
+
+def _fallback(sku, phys_w, phys_h, direction, tp_dir, tp_xoff, tp_yoff, note):
+    return _save(sku, phys_w, phys_h, direction, tp_dir, tp_xoff, tp_yoff,
+                 calibrated=False, note=note)
+
+
+def _save(sku, phys_w, phys_h, direction, tp_dir, tp_xoff, tp_yoff,
+          calibrated=True, note="", **extra) -> dict:
     result = {
         "sku": sku,
         "phys_w": phys_w, "phys_h": phys_h,
-        "touch_x_min": x_min, "touch_x_max": x_max,
-        "touch_y_min": y_min, "touch_y_max": y_max,
         "direction": direction, "tp_direction": tp_dir,
         "tp_xoffset": tp_xoff, "tp_yoffset": tp_yoff,
-        "calibrated": True,
+        "calibrated": calibrated,
+        "note": note,
+        **extra,
     }
-
-    # Save calibration
-    ui_map_dir = Path(ROOT) / "ui-map"
+    ui_map_dir = ROOT / "ui-map"
     ui_map_dir.mkdir(exist_ok=True)
     calib_file = ui_map_dir / f"{sku}.json"
     calib_file.write_text(json.dumps(result, ensure_ascii=False, indent=2))
-    print(f"\n  Calibration saved to: {calib_file}")
-    
+    print(json.dumps({"step": "saved", "file": str(calib_file), "calibrated": calibrated}), flush=True)
     return result
 
 
@@ -200,4 +168,5 @@ if __name__ == "__main__":
     parser.add_argument("--serial", required=True)
     parser.add_argument("--adb", default="adb")
     args = parser.parse_args()
-    calibrate(args.serial, args.adb)
+    result = calibrate(args.serial, adb_path=args.adb)
+    print(json.dumps(result, indent=2, ensure_ascii=False))

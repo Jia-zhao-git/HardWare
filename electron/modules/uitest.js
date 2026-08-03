@@ -126,6 +126,27 @@ async function uitest_start(event, { serial, testFile, loops, durationMin }) {
 
     broadcastLog(win, `[START] serial=${serial} loops=${loops || '∞'} duration=${durationMin || '—'}min`);
 
+    // Check if SKU calibration file exists; warn immediately if missing
+    (async () => {
+        try {
+            const pythonCmd = detectPython();
+            const { execSync } = require('child_process');
+            const skuOut = execSync(
+                `${pythonCmd} -c "import sys;sys.path.insert(0,r'${DICTPEN_UI_ROOT}');from dictpen_ui.device import DictPenDevice;from dictpen_ui.adb import Adb;a=Adb('${serial}');d=DictPenDevice(a);i=d.read_info();print(i.sku)"`,
+                { cwd: DICTPEN_UI_ROOT, env: { ...process.env, PYTHONUTF8: '1' }, timeout: 10000 }
+            ).toString().trim();
+            if (skuOut) {
+                const calibFile = path.join(DICTPEN_UI_ROOT, 'ui-map', `${skuOut}.json`);
+                if (!fs.existsSync(calibFile)) {
+                    broadcastLog(win, `[WARN] 未找到 SKU "${skuOut}" 的校准文件`);
+                    broadcastLog(win, `[WARN] 坐标将依赖 cfg.json 默认值，建议先运行「校准」（约 60 秒）`);
+                } else {
+                    broadcastLog(win, `[INFO] 已加载校准文件: ui-map/${skuOut}.json`);
+                }
+            }
+        } catch (_) { /* non-fatal — don't block test start */ }
+    })();
+
     proc.stdout.on('data', (chunk) => {
         const text = chunk.toString('utf8');
         text.split('\n').forEach(line => {
