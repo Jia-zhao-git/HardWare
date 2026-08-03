@@ -8,6 +8,27 @@
 
 const { spawn } = require('child_process');
 const path = require('path');
+
+// --------------------------------------------------------------------------
+// Shared Python detection (cached after first call)
+// --------------------------------------------------------------------------
+let _cachedPython = null;
+function detectPython() {
+    if (_cachedPython) return _cachedPython;
+    const { execSync } = require('child_process');
+    const candidates = process.platform === 'win32'
+        ? ['python', 'python3', 'py']
+        : ['python3', 'python'];
+    for (const cmd of candidates) {
+        try {
+            execSync(`${cmd} --version`, { stdio: 'ignore', timeout: 3000 });
+            _cachedPython = cmd;
+            return cmd;
+        } catch (_) {}
+    }
+    _cachedPython = candidates[0];
+    return _cachedPython;
+}
 const fs = require('fs');
 const { getState } = require('./context');
 
@@ -76,21 +97,7 @@ async function uitest_start(event, { serial, testFile, loops, durationMin }) {
         args.push('--duration', String(durationMin));
     }
 
-    const pythonPath = (() => {
-        // Try python3 first, then python, then full path
-        const candidates = process.platform === 'win32'
-            ? ['python', 'python3', 'py']
-            : ['python3', 'python'];
-        // Use synchronous which-like check
-        const { execSync } = require('child_process');
-        for (const cmd of candidates) {
-            try {
-                execSync(`${cmd} --version`, { stdio: 'ignore', timeout: 3000 });
-                return cmd;
-            } catch (_) {}
-        }
-        return candidates[0]; // fallback
-    })();
+    const pythonPath = detectPython();
     const proc = spawn(pythonPath, args, {
         cwd: DICTPEN_UI_ROOT,
         windowsHide: true,
@@ -438,9 +445,7 @@ async function uitest_run_gen(event, { serial }) {
     if (!fs.existsSync(genPy)) return { success: false, error: 'gen_all_apps_test.py not found' };
     const win = event.sender ? require('electron').BrowserWindow.fromWebContents(event.sender) : null;
     return new Promise((resolve) => {
-        const { execSync } = require('child_process');
-        let pythonCmd = 'python';
-        try { execSync('python3 --version', { stdio: 'ignore', timeout: 3000 }); pythonCmd = 'python3'; } catch (_) {}
+        const pythonCmd = detectPython();
         const env = { ...process.env, PYTHONUTF8: '1' };
         if (serial) env.DICTPEN_SERIAL = serial;
         const proc = require('child_process').spawn(pythonCmd, [genPy], {
@@ -461,9 +466,7 @@ async function uitest_calibrate(event, { serial }) {
     if (!fs.existsSync(calPy)) return { success: false, error: 'calibrate.py not found' };
     const win = event.sender ? require('electron').BrowserWindow.fromWebContents(event.sender) : null;
     return new Promise((resolve) => {
-        const { execSync } = require('child_process');
-        let pythonCmd = 'python';
-        try { execSync('python3 --version', { stdio: 'ignore', timeout: 3000 }); pythonCmd = 'python3'; } catch (_) {}
+        const pythonCmd = detectPython();
         const env = { ...process.env, PYTHONUTF8: '1' };
         const proc = require('child_process').spawn(pythonCmd, [
             '-c',

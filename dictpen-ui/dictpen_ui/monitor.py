@@ -80,12 +80,12 @@ class DeviceMonitor:
     # Memory (from free -k)
     # ------------------------------------------------------------------
     def snapshot_mem(self, label: str = "") -> MemSnapshot:
-        raw = self.adb.shell("free -k", check=False)
+        raw = self.adb.shell("free -k 2>/dev/null || cat /proc/meminfo", check=False)
         s = MemSnapshot(ts=time.time(), label=label)
+        # Try 'free -k' output first: Mem: total used free shared buff/cache available
         for line in raw.splitlines():
             parts = line.split()
             if parts and parts[0].startswith("Mem"):
-                # free -k: total used free shared buff/cache available
                 try:
                     s.mem_total_kb     = int(parts[1])
                     s.mem_used_kb      = int(parts[2])
@@ -93,7 +93,6 @@ class DeviceMonitor:
                     s.buffers_kb       = int(parts[5]) if len(parts) > 5 else 0
                     s.mem_available_kb = int(parts[6]) if len(parts) > 6 else s.mem_free_kb
                 except (IndexError, ValueError):
-                    # fallback: parse /proc/meminfo style
                     pass
             elif parts and parts[0].startswith("Swap"):
                 try:
@@ -102,8 +101,22 @@ class DeviceMonitor:
                     s.swap_free_kb  = int(parts[3])
                 except (IndexError, ValueError):
                     pass
+        # Fallback: parse /proc/meminfo style (MemTotal: 123456 kB)
+        if s.mem_total_kb == 0:
+            for line in raw.splitlines():
+                m = re.match(r"(\w+):\s*(\d+)", line)
+                if not m:
+                    continue
+                key, val = m.group(1), int(m.group(2))
+                if key == "MemTotal":     s.mem_total_kb = val
+                elif key == "MemFree":    s.mem_free_kb = val
+                elif key == "MemAvailable": s.mem_available_kb = val
+                elif key == "Buffers":    s.buffers_kb = val
+                elif key == "SwapTotal":  s.swap_total_kb = val
+                elif key == "SwapFree":   s.swap_free_kb = val
+                elif key == "SwapCached": s.swap_used_kb = s.swap_total_kb - val - s.swap_free_kb
         if s.mem_available_kb == 0:
-            s.mem_available_kb = s.mem_total_kb - s.mem_used_kb
+            s.mem_available_kb = s.mem_total_kb - s.mem_used_kb if s.mem_used_kb else s.mem_free_kb
         self.mem_snapshots.append(s)
         return s
 
