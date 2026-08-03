@@ -1,0 +1,92 @@
+# Single APP Stability Test
+# Purpose: keep one target app running for a long time and simulate safe in-app user actions.
+#
+# How to use:
+# 1. Replace <APPID> with the target miniapp id.
+# 2. In GUI, set loop=0 and duration=720 for a 12-hour stability run.
+# 3. Random operations use a safe center area and avoid hardware back key / edge gestures.
+# 4. ensure_app_active detects accidental exit-to-home and relaunches the app with WARN evidence.
+
+name: single_app_stability
+on_failure:
+  stop: false
+keep_failed_screenshots_only: true
+steps:
+  - name: capture_home_baseline
+    action: press_key
+    key: asr
+    wait: 1.0
+    capture: home
+
+  - name: launch_target_app
+    action: shell
+    command: miniapp_cli start <APPID>
+    wait: 2.5
+    capture: app_enter
+
+  - name: assert_app_launched
+    action: assert
+    screen_changed_from: home
+    current: app_enter
+    warn_only: true
+
+  - name: assert_app_not_blank
+    action: assert
+    capture_not_blank: app_enter
+    min_kb: 3
+    warn_only: true
+
+  - name: safe_in_app_shuffle_1
+    action: shuffle
+    safe_mode: true
+    margin: 0.30
+    ops: [tap, swipe, long_press]
+    dirs: [up, down]
+    n: 8
+    wait: 0.5
+    capture: after_shuffle_1
+
+  - name: guard_app_active_1
+    action: ensure_app_active
+    appid: <APPID>
+    home: home
+    wait: 2.5
+    capture: guard_1
+
+  - name: safe_random_taps
+    action: random_tap
+    count: 5
+    margin: 0.35
+    wait: 0.5
+    capture: after_taps
+
+  - name: guard_app_active_2
+    action: ensure_app_active
+    appid: <APPID>
+    home: home
+    wait: 2.5
+    capture: guard_2
+
+  - name: safe_scrolls
+    action: random_swipe
+    count: 4
+    dirs: [up, down]
+    margin: 0.30
+    wait: 0.5
+    capture: after_scrolls
+
+  - name: guard_app_active_3
+    action: ensure_app_active
+    appid: <APPID>
+    home: home
+    wait: 2.5
+    capture: guard_3
+
+  - name: proc_snapshot_single_app
+    action: proc_snapshot
+    label: single_app_cycle_done
+
+  - name: memory_check_warn
+    action: assert
+    mem_delta_ok: -20
+    warn_only: true

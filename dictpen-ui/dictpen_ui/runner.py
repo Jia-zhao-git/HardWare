@@ -234,16 +234,43 @@ class TestRunner:
                             issues.append(f"{pname}(restarted {pid}->{curr.procs[pname]})")
                 if issues:
                     raise AssertionError(f"Process anomaly: {', '.join(issues)}")
+            elif action == "ensure_app_active":
+                # Guard for long single-app stability tests.
+                # If random taps/swipes accidentally leave the app and return to the captured home screen,
+                # relaunch the target app, but mark this step as warned so the final report keeps evidence.
+                appid = str(step.get("appid") or step.get("app_id") or "").strip()
+                if not appid:
+                    raise ValueError("ensure_app_active requires appid")
+                home_key = step.get("home") or step.get("home_capture") or "home"
+                current_label = step.get("capture") or f"ensure_app_{index}"
+                current = self._capture(index, str(current_label), steps_dir)
+                captures[str(current_label)] = current
+                res.screenshot = str(current)
+                res.command = f"ensure_app_active {appid}"
+                if home_key in captures and not files_differ(captures[home_key], current):
+                    self.adb.shell(f"miniapp_cli start {appid}", timeout=int(step.get("timeout", 30)), check=False)
+                    time.sleep(float(step.get("relaunch_wait", step.get("wait", 2.5))))
+                    relaunched_label = str(step.get("relaunch_capture") or f"relaunched_{index}")
+                    relaunched = self._capture(index, relaunched_label, steps_dir)
+                    captures[relaunched_label] = relaunched
+                    res.screenshot = str(relaunched)
+                    res.status = "warned"
+                    res.message = "App appeared to exit to home; relaunched target app"
             elif action == "random_tap":
                 # Tap N times at random positions within the safe area
                 count = int(step.get("count", step.get("n", 3)))
                 ss_w, ss_h = self.coords.ss_w, self.coords.ss_h
+                margin = float(step.get("margin", 0.2))
+                min_x = max(1, int(ss_w * margin))
+                max_x = min(ss_w - 1, int(ss_w * (1 - margin)))
+                min_y = max(1, int(ss_h * margin))
+                max_y = min(ss_h - 1, int(ss_h * (1 - margin)))
                 for _ in range(count):
-                    sx = random.randint(ss_w // 5, ss_w * 4 // 5)
-                    sy = random.randint(ss_h // 5, ss_h * 4 // 5)
+                    sx = random.randint(min_x, max_x)
+                    sy = random.randint(min_y, max_y)
                     self.input.tap(sx, sy, int(step.get("duration_ms", 100)))
                     time.sleep(random.uniform(0.2, 0.6))
-                res.command = f"random_tap x{count} (screen {ss_w}x{ss_h})"
+                res.command = f"random_tap x{count} margin={margin} (screen {ss_w}x{ss_h})"
                 if step.get("capture"):
                     path = self._capture(index, str(step.get("capture")), steps_dir)
                     captures[str(step.get("capture"))] = path
@@ -251,19 +278,26 @@ class TestRunner:
             elif action == "random_swipe":
                 # Swipe in random directions N times
                 count = int(step.get("count", step.get("n", 2)))
-                dirs = ["up", "down", "left", "right"]
+                dirs = step.get("dirs") or step.get("directions") or ["up", "down", "left", "right"]
+                if isinstance(dirs, str):
+                    dirs = [x.strip() for x in dirs.split(",") if x.strip()]
+                margin = float(step.get("margin", 0.25))
+                left = int(self.coords.ss_w * margin)
+                right = int(self.coords.ss_w * (1 - margin))
+                top = int(self.coords.ss_h * margin)
+                bottom = int(self.coords.ss_h * (1 - margin))
                 for _ in range(count):
                     d = random.choice(dirs)
                     if d == "up":
-                        self.input.swipe(self.coords.ss_w//2, self.coords.ss_h*3//4, self.coords.ss_w//2, self.coords.ss_h//4)
+                        self.input.swipe(self.coords.ss_w//2, bottom, self.coords.ss_w//2, top)
                     elif d == "down":
-                        self.input.swipe(self.coords.ss_w//2, self.coords.ss_h//4, self.coords.ss_w//2, self.coords.ss_h*3//4)
+                        self.input.swipe(self.coords.ss_w//2, top, self.coords.ss_w//2, bottom)
                     elif d == "left":
-                        self.input.swipe(self.coords.ss_w*3//4, self.coords.ss_h//2, self.coords.ss_w//4, self.coords.ss_h//2)
+                        self.input.swipe(right, self.coords.ss_h//2, left, self.coords.ss_h//2)
                     elif d == "right":
-                        self.input.swipe(self.coords.ss_w//4, self.coords.ss_h//2, self.coords.ss_w*3//4, self.coords.ss_h//2)
+                        self.input.swipe(left, self.coords.ss_h//2, right, self.coords.ss_h//2)
                     time.sleep(random.uniform(0.3, 0.8))
-                res.command = f"random_swipe x{count}"
+                res.command = f"random_swipe x{count} dirs={dirs} margin={margin}"
                 if step.get("capture"):
                     path = self._capture(index, str(step.get("capture")), steps_dir)
                     captures[str(step.get("capture"))] = path
@@ -302,34 +336,44 @@ class TestRunner:
             elif action == "shuffle":
                 # Do a random mix of operations: scroll+swipe+tap+long_press
                 ss_w, ss_h = self.coords.ss_w, self.coords.ss_h
+                safe_mode = bool(step.get("safe_mode", False))
+                margin = float(step.get("margin", 0.25 if safe_mode else 0.2))
+                allowed_ops = step.get("ops") or step.get("operations") or ["tap", "swipe", "long_press"]
+                if isinstance(allowed_ops, str):
+                    allowed_ops = [x.strip() for x in allowed_ops.split(",") if x.strip()]
                 ops_done = 0
                 commands = []
                 for _ in range(int(step.get("n", 5))):
-                    op = random.choice(["tap", "swipe", "long_press"])
+                    op = random.choice(allowed_ops)
                     if op == "tap":
-                        sx = random.randint(ss_w//5, ss_w*4//5)
-                        sy = random.randint(ss_h//5, ss_h*4//5)
+                        sx = random.randint(int(ss_w*margin), int(ss_w*(1-margin)))
+                        sy = random.randint(int(ss_h*margin), int(ss_h*(1-margin)))
                         self.input.tap(sx, sy, random.randint(60, 200))
                         commands.append(f"tap({sx},{sy})")
                         ops_done += 1
                     elif op == "swipe":
-                        d = random.choice(["up","down","left","right"])
-                        if d == "up":    self.input.swipe(ss_w//2,ss_h*3//4, ss_w//2,ss_h//4)
-                        elif d == "down":  self.input.swipe(ss_w//2,ss_h//4, ss_w//2,ss_h*3//4)
-                        elif d == "left": self.input.swipe(ss_w*3//4,ss_h//2, ss_w//4,ss_h//2)
-                        elif d == "right":self.input.swipe(ss_w//4,ss_h//2, ss_w*3//4,ss_h//2)
+                        dirs = step.get("dirs") or step.get("directions") or (["up","down"] if safe_mode else ["up","down","left","right"])
+                        if isinstance(dirs, str):
+                            dirs = [x.strip() for x in dirs.split(",") if x.strip()]
+                        d = random.choice(dirs)
+                        left = int(ss_w * margin); right = int(ss_w * (1 - margin))
+                        top = int(ss_h * margin); bottom = int(ss_h * (1 - margin))
+                        if d == "up":    self.input.swipe(ss_w//2,bottom, ss_w//2,top)
+                        elif d == "down":  self.input.swipe(ss_w//2,top, ss_w//2,bottom)
+                        elif d == "left": self.input.swipe(right,ss_h//2, left,ss_h//2)
+                        elif d == "right":self.input.swipe(left,ss_h//2, right,ss_h//2)
                         commands.append(f"swipe_{d}")
                         ops_done += 1
                     elif op == "long_press":
-                        sx = random.randint(ss_w//5, ss_w*4//5)
-                        sy = random.randint(ss_h//5, ss_h*4//5)
+                        sx = random.randint(int(ss_w*margin), int(ss_w*(1-margin)))
+                        sy = random.randint(int(ss_h*margin), int(ss_h*(1-margin)))
                         ms = random.randint(400, 1200)
                         p = self.coords.screenshot_to_touch(sx, sy)
                         self.adb.shell(f"send_event touch press {p.x} {p.y}; sleep {ms/1000:.3f}; send_event touch release", timeout=10)
                         commands.append(f"long_press({sx},{sy},{ms}ms)")
                         ops_done += 1
                     time.sleep(random.uniform(0.3, 0.7))
-                res.command = f"shuffle({ops_done}): " + ", ".join(commands)
+                res.command = f"shuffle({ops_done}, safe={safe_mode}, margin={margin}): " + ", ".join(commands)
                 if step.get("capture"):
                     path = self._capture(index, str(step.get("capture")), steps_dir)
                     captures[str(step.get("capture"))] = path

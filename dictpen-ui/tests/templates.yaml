@@ -183,6 +183,54 @@ templates:
             - miniapp
             - runDictPen
 
+  - name: single_app_stability
+    label: Single App Stability
+    description: Long run inside one app with safe gestures and auto-relaunch guard
+    content: |
+      name: single_app_stability
+      on_failure:
+        stop: false
+      keep_failed_screenshots_only: true
+      steps:
+        - name: capture_home_baseline
+          action: press_key
+          key: asr
+          wait: 1.0
+          capture: home
+
+        - name: launch_target_app
+          action: shell
+          command: miniapp_cli start <APPID>
+          wait: 2.5
+          capture: app_enter
+
+        - name: assert_app_launched
+          action: assert
+          screen_changed_from: home
+          current: app_enter
+          warn_only: true
+
+        - name: safe_in_app_shuffle
+          action: shuffle
+          safe_mode: true
+          margin: 0.30
+          ops: [tap, swipe, long_press]
+          dirs: [up, down]
+          n: 8
+          wait: 0.5
+          capture: after_shuffle
+
+        - name: guard_app_active
+          action: ensure_app_active
+          appid: <APPID>
+          home: home
+          wait: 2.5
+          capture: guard
+
+        - name: proc_snapshot
+          action: proc_snapshot
+          label: single_app_cycle_done
+
   - name: edge_cases
     label: Edge Cases
     description: Edge swipes, long press, boundary taps
