@@ -129,10 +129,12 @@ class TestRunner:
         for i, step in enumerate(spec.get("steps", []), start=1):
             step_result = self._run_step(i, step, steps_dir, captures)
             result.steps.append(step_result)
-            if step_result.status not in ("passed", "warned"):
+            if step_result.status == "failed":
                 result.status = "failed"
                 if stop_on_failure:
                     break
+            elif step_result.status == "warned" and result.status == "passed":
+                result.status = "warned"
 
         # --- final snapshots ---
         self.monitor.snapshot_mem("end")
@@ -215,12 +217,23 @@ class TestRunner:
                 self._assert_step(step, captures)
             elif action == "proc_snapshot":
                 # Take an inline process snapshot mid-test to catch crashes per-app
+                # Compare against the PREVIOUS snapshot (not the very first) to avoid
+                # reporting old crashes repeatedly on every subsequent app.
                 label = step.get("label", f"snap_{index}")
-                snap = self.monitor.snapshot_procs(label)
-                issues = self.monitor.check_crashes()
+                self.monitor.snapshot_procs(label)
+                # Only compare last two snapshots so each proc_snapshot is independent
+                issues = []
+                snaps = self.monitor.proc_snapshots
+                if len(snaps) >= 2:
+                    prev = snaps[-2]
+                    curr = snaps[-1]
+                    for pname, pid in prev.procs.items():
+                        if pname not in curr.procs:
+                            issues.append(f"{pname}(disappeared)")
+                        elif curr.procs[pname] != pid:
+                            issues.append(f"{pname}(restarted {pid}->{curr.procs[pname]})")
                 if issues:
-                    names = ", ".join(f"{c['proc']}({c['issue']})" for c in issues)
-                    raise AssertionError(f"Process anomaly detected: {names}")
+                    raise AssertionError(f"Process anomaly: {', '.join(issues)}")
             elif action == "random_tap":
                 # Tap N times at random positions within the safe area
                 count = int(step.get("count", step.get("n", 3)))
