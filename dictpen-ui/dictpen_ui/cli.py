@@ -12,6 +12,7 @@ from .calibrate import calibrate
 from .runner import TestRunner
 from .screenshot import ScreenshotDriver, png_size, sha256_file
 from .screenshot import files_differ
+from .simple_yaml import load_simple_yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -83,6 +84,31 @@ def cmd_run(args) -> int:
     cycle = 0
     last_status = "passed"
     all_results: list = []
+
+    # ── device info header (first log line) ──
+    info = runner.info
+    spec = load_simple_yaml(test_path)
+    test_name = spec.get("name", test_path.stem) if isinstance(spec, dict) else test_path.stem
+    steps_total = len(spec.get("steps", [])) if isinstance(spec, dict) else 0
+    ss_w, ss_h = runner.coords.screenshot_size
+    device_header = {
+        "event": "device_info",
+        "serial": serial,
+        "sku": info.sku,
+        "hostname": info.hostname,
+        "screen_physical": f"{info.screen.width or '?'}x{info.screen.height or '?'}",
+        "screenshot": f"{ss_w}x{ss_h}",
+        "direction": info.screen.direction,
+        "tp_direction": info.screen.tp_direction,
+        "tp_xoffset": info.screen.tp_xoffset,
+        "tp_yoffset": info.screen.tp_yoffset,
+        "test": test_name,
+        "loop": "∞" if loop == 0 else str(loop),
+        "duration_min": args.duration if args.duration else "∞",
+        "apps_per_cycle": steps_total,
+        "est_cycle_min": round(steps_total * 0.8 / 60, 1) if steps_total else 0,
+    }
+    print(json.dumps(device_header, ensure_ascii=False), flush=True)
 
     while True:
         cycle += 1

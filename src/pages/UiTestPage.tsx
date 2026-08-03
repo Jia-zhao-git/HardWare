@@ -9,6 +9,15 @@ import {
 
 interface Template { name: string; label: string; description: string; content: string }
 
+interface DeviceRunInfo {
+  serial: string; sku: string; hostname: string;
+  screen_physical: string; screenshot: string;
+  direction: number; tp_direction: number;
+  tp_xoffset: number; tp_yoffset: number;
+  test: string; loop: string; duration_min: string | number;
+  apps_per_cycle: number; est_cycle_min: number;
+}
+
 interface Props {
   selectedDevice: string
   showNotif: (t: string, m: string) => void
@@ -60,6 +69,8 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
   const [validateMsg, setValidateMsg] = useState<string | null>(null)
   const [newFileName, setNewFileName] = useState('')
   const [showHelp, setShowHelp] = useState(false)
+  const [stoppedElapsed, setStoppedElapsed] = useState(0)
+  const [deviceInfo, setDeviceInfo] = useState<DeviceRunInfo | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -102,9 +113,19 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
 
   useEffect(() => {
     const unsubLog = onUitestLog(({ line }) => {
+      // Detect device_info event in the log stream
+      try {
+        const obj = JSON.parse(line)
+        if (obj.event === 'device_info') {
+          setDeviceInfo(obj as DeviceRunInfo)
+          return  // don't add to log — shown in header card
+        }
+      } catch (_) {}
       setLogs(prev => [...prev.slice(-1999), line])
     })
     const unsubDone = onUitestDone(({ code, cycles, summaryReport, lastStatus }) => {
+      // Freeze elapsed time when test stops
+      setStoppedElapsed(status?.startTime ? Math.round((Date.now() - status.startTime) / 1000) : 0)
       setStatus(prev => prev ? { ...prev, running: false, cycles, lastStatus, summaryReport } : null)
       stopPoll()
       loadReports()
@@ -125,6 +146,8 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
   const start = async () => {
     if (!selectedDevice) { showNotif('warning', '请先连接设备'); return }
     setLogs([])
+    setDeviceInfo(null)
+    setStoppedElapsed(0)
     setActiveTab('run')
     const r = await invoke<{ success: boolean; error?: string }>('uitest_start', {
       serial: selectedDevice,
@@ -142,6 +165,8 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
   }
 
   const stop = async () => {
+    // Freeze elapsed time before sending stop
+    setStoppedElapsed(status?.startTime ? Math.round((Date.now() - status.startTime) / 1000) : 0)
     await invoke('uitest_stop', {})
     showNotif('success', '已发送停止信号')
     stopPoll()
@@ -256,8 +281,10 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
   }
 
   const running = status?.running ?? false
-  const elapsed = status?.startTime ? Math.round((Date.now() - status.startTime) / 1000) : 0
-  const elapsedStr = elapsed > 0 ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : '—'
+  const elapsed = running
+    ? (status?.startTime ? Math.round((Date.now() - status.startTime) / 1000) : 0)
+    : stoppedElapsed
+  const elapsedStr = (running || stoppedElapsed > 0) ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : '—'
   const statusColor = running ? '#4fc3f7'
     : status?.lastStatus === 'passed' ? '#10b981'
     : status?.lastStatus === 'failed' ? '#e94560'
@@ -369,6 +396,26 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
             </div>
 
             <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: 10 }}>
+              {/* ── Device info card (shown when test starts) ── */}
+              {deviceInfo && (
+                <div style={{
+                  display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+                  gap: '6px 12px', padding: '10px 14px',
+                  background: '#0d1117', border: '1px solid #30363d',
+                  borderRadius: 6, marginBottom: 10, fontSize: 12,
+                }}>
+                  <div><span style={{ color: '#58a6ff' }}>设备</span> <span style={{ color: '#c9d1d9', fontFamily: 'monospace' }}>{deviceInfo.serial}</span></div>
+                  <div><span style={{ color: '#58a6ff' }}>SKU</span> <span style={{ color: '#c9d1d9', fontFamily: 'monospace' }}>{deviceInfo.sku}</span></div>
+                  <div><span style={{ color: '#58a6ff' }}>分辨率</span> <span style={{ color: '#c9d1d9' }}>{deviceInfo.screen_physical} → {deviceInfo.screenshot}</span></div>
+                  <div><span style={{ color: '#58a6ff' }}>方向</span> <span style={{ color: '#7ee787' }}>屏幕={deviceInfo.direction}° 触摸={deviceInfo.tp_direction}°</span></div>
+                  <div><span style={{ color: '#58a6ff' }}>测试用例</span> <span style={{ color: '#c9d1d9', fontFamily: 'monospace' }}>{deviceInfo.test}</span></div>
+                  <div><span style={{ color: '#58a6ff' }}>每轮步骤</span> <span style={{ color: '#d2a8ff' }}>{deviceInfo.apps_per_cycle} 步</span></div>
+                  <div><span style={{ color: '#58a6ff' }}>循环次数</span> <span style={{ color: '#ffb700' }}>{deviceInfo.loop}</span></div>
+                  <div><span style={{ color: '#58a6ff' }}>时长限制</span> <span style={{ color: '#ffb700' }}>{String(deviceInfo.duration_min)} min</span></div>
+                  <div><span style={{ color: '#58a6ff' }}>预计/轮</span> <span style={{ color: '#8b949e' }}>~{deviceInfo.est_cycle_min} min</span></div>
+                  {deviceInfo.tp_xoffset !== 0 && <div><span style={{ color: '#58a6ff' }}>偏移</span> <span style={{ color: '#f78166' }}>X={deviceInfo.tp_xoffset} Y={deviceInfo.tp_yoffset}</span></div>}
+                </div>
+              )}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                 <Terminal size={13} style={{ color: 'var(--text-muted)' }} />
                 <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>实时日志（{logs.length} 行）</span>

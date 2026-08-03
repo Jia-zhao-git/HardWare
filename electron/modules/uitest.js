@@ -31,6 +31,7 @@ const testState = {
     summaryReport: null,
     cycles: 0,
     lastStatus: 'idle',
+    stoppedByUser: false,  // prevent duplicate uitest_done
 };
 
 function addLog(line) {
@@ -96,6 +97,7 @@ async function uitest_start(event, { serial, testFile, loops, durationMin }) {
     });
 
     testState.running    = true;
+    testState.stoppedByUser = false;
     testState.serial     = serial;
     testState.proc       = proc;
     testState.startTime  = Date.now();
@@ -135,12 +137,15 @@ async function uitest_start(event, { serial, testFile, loops, durationMin }) {
         addLog(msg);
         if (win && !win.isDestroyed()) {
             win.webContents.send('uitest_log', { line: msg });
-            win.webContents.send('uitest_done', {
-                code,
-                cycles: testState.cycles,
-                summaryReport: testState.summaryReport,
-                lastStatus: testState.lastStatus,
-            });
+            // Don't send uitest_done if already stopped by user (report already generated)
+            if (!testState.stoppedByUser) {
+                win.webContents.send('uitest_done', {
+                    code,
+                    cycles: testState.cycles,
+                    summaryReport: testState.summaryReport,
+                    lastStatus: testState.lastStatus,
+                });
+            }
         }
     });
 
@@ -161,9 +166,144 @@ async function uitest_stop(event, {}) {
             spawn('taskkill', ['/F', '/T', '/PID', String(testState.proc.pid)], { windowsHide: true });
         }
         testState.running = false;
+        testState.stoppedByUser = true;
+
+        // Generate summary report from existing runs after stopping
+        const win = event.sender ? require('electron').BrowserWindow.fromWebContents(event.sender) : null;
+        setTimeout(() => _generate_report_from_runs(win), 1500);
+
         return { success: true };
     } catch (e) {
         return { success: false, error: String(e) };
+    }
+}
+
+// --------------------------------------------------------------------------
+// Internal: generate summary report from runs/ directory
+// --------------------------------------------------------------------------
+function _generate_report_from_runs(win) {
+    if (!fs.existsSync(RUNS_DIR)) return;
+    const runDirs = fs.readdirSync(RUNS_DIR)
+        .filter(f => { const p = path.join(RUNS_DIR, f, 'run.json'); return fs.existsSync(p); })
+        .sort()
+        .slice(-100);  // last 100 runs max
+    if (runDirs.length < 1) return;
+
+    // Read all run.json files
+    const results = [];
+    for (const d of runDirs) {
+        try {
+            const raw = fs.readFileSync(path.join(RUNS_DIR, d, 'run.json'), 'utf8');
+            const r = JSON.parse(raw);
+            results.push(r);
+        } catch (_) {}
+    }
+    if (results.length === 0) return;
+
+    // Build simple summary HTML
+    const total = results.length;
+    const passed = results.filter(r => r.status === 'passed').length;
+    const warned = results.filter(r => r.status === 'warned').length;
+    const failed = results.filter(r => r.status === 'failed').length;
+    const crashes = results.filter(r => r.crash_issues && r.crash_issues.length > 0).length;
+
+    // Memory trend
+    const memLabels = [];
+    const memData = [];
+    for (let i = 0; i < results.length; i++) {
+        const ms = results[i].mem_series || [];
+        if (ms.length > 0) {
+            memLabels.push('c' + (i + 1));
+            memData.push(Math.round(ms[0].mem_available_kb / 1024));
+        }
+    }
+
+    // Failed step summary
+    const cycleRows = results.map((r, i) => {
+        const failedSteps = (r.steps || []).filter(s => s.status === 'failed');
+        const crashCell = (r.crash_issues && r.crash_issues.length > 0)
+            ? r.crash_issues.map(c => c.proc + '(' + c.issue + ')').join(', ')
+            : 'OK';
+        const ms = r.mem_series || [];
+        const memS = ms.length > 0 ? Math.round(ms[0].mem_available_kb / 1024) : '?';
+        const memE = ms.length > 0 ? Math.round(ms[ms.length - 1].mem_available_kb / 1024) : '?';
+        const failedNames = failedSteps.map(s => s.name).join('; ') || '-';
+        return `<tr>
+  <td>${i + 1}</td>
+  <td>${r.run_id || ''}</td>
+  <td class="${r.status}">${r.status || '?'}</td>
+  <td>${crashCell}</td>
+  <td>${memS}</td>
+  <td>${memE}</td>
+  <td style="font-size:11px">${failedNames}</td>
+</tr>`;
+    }).join('\n');
+
+    const now = new Date();
+    const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}-${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
+    const outPath = path.join(RUNS_DIR, `summary-${ts}.html`);
+
+    const html = `<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>DictPen Report</title>
+<style>
+body{font-family:Segoe UI,Arial,sans-serif;margin:24px;background:#fafafa}
+table{border-collapse:collapse;width:100%;background:#fff;margin-bottom:16px}
+td,th{border:1px solid #ddd;padding:6px 8px;vertical-align:top}
+th{background:#f0f0f0}
+.passed{color:#148a08;font-weight:700}
+.warned{color:#b07800;font-weight:700}
+.failed{color:#c00;font-weight:700}
+.stat{display:inline-block;margin:8px 12px 8px 0;padding:10px 18px;border:1px solid #ddd;background:#fff;border-radius:6px;font-size:18px}
+canvas{max-width:960px;width:100%;background:#fff;border:1px solid #ddd;display:block;margin-bottom:24px}
+</style>
+<h1>DictPen UI Test Report (Stopped)</h1>
+<p>Generated: ${now.toLocaleString('zh-CN')} &nbsp; Cycles: ${total}</p>
+<div>
+  <div class='stat'>Cycles<br><b>${total}</b></div>
+  <div class='stat passed'>Passed<br><b>${passed}</b></div>
+  <div class='stat warned'>Warned<br><b>${warned}</b></div>
+  <div class='stat failed'>Failed<br><b>${failed}</b></div>
+  <div class='stat ${crashes ? 'failed' : 'passed'}'>Crashes<br><b>${crashes}</b></div>
+</div>
+<h2>Memory Available (MB)</h2>
+<canvas id="c" height="60"></canvas>
+<script>
+(function(){
+  var L=${JSON.stringify(memLabels)},D=${JSON.stringify(memData)};
+  var c=document.getElementById('c'),ctx=c.getContext('2d');
+  var W=960,H=120;c.width=W;c.height=H;var n=D.length;
+  if(n<1)return;
+  var max=Math.max.apply(null,D),min=Math.min.apply(null,D);
+  var pad={l:60,r:120,t:14,b:26},w=W-pad.l-pad.r,h=H-pad.t-pad.b;
+  function sx(i){return pad.l+(n<2?w/2:i/(n-1)*w)}
+  function sy(v){return pad.t+h-((v-min)/((max-min)||1))*h}
+  ctx.strokeStyle='#eee';ctx.lineWidth=1;
+  for(var g=0;g<=4;g++){var y=pad.t+g*h/4;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(pad.l+w,y);ctx.stroke();ctx.fillStyle='#888';ctx.font='11px sans-serif';ctx.textAlign='right';ctx.fillText(Math.round(min+(max-min)*(1-g/4))+'MB',pad.l-4,y+4)}
+  ctx.strokeStyle='#1a7';ctx.lineWidth=2;ctx.beginPath();
+  D.forEach(function(v,i){i===0?ctx.moveTo(sx(i),sy(v)):ctx.lineTo(sx(i),sy(v))});
+  ctx.stroke();
+  var step=Math.max(1,Math.floor(n/20));
+  ctx.fillStyle='#555';ctx.font='10px sans-serif';ctx.textAlign='center';
+  L.forEach(function(l,i){if(i%step===0)ctx.fillText(l,sx(i),H-4)});
+  ctx.fillStyle='#1a7';ctx.fillRect(W-120,8,14,4);ctx.fillStyle='#333';ctx.textAlign='left';ctx.font='11px sans-serif';ctx.fillText('Available MB',W-102,16);
+})();
+</script>
+<h2>Cycles</h2>
+<table><tr><th>#</th><th>Run ID</th><th>Status</th><th>Process</th><th>Mem Start</th><th>Mem End</th><th>Failed Steps</th></tr>
+${cycleRows}
+</table>
+</html>`;
+    fs.writeFileSync(outPath, html, 'utf8');
+    testState.summaryReport = outPath;
+    addLog('[REPORT] Summary generated: ' + outPath);
+    if (win && !win.isDestroyed()) {
+        win.webContents.send('uitest_log', { line: '[REPORT] Summary report: ' + path.basename(outPath) });
+        win.webContents.send('uitest_done', {
+            code: 0,
+            cycles: testState.cycles,
+            summaryReport: outPath,
+            lastStatus: testState.lastStatus,
+        });
     }
 }
 
