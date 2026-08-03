@@ -132,9 +132,10 @@ export function onScriptDone(callback: (data: ScriptDoneData) => void): () => vo
 }
 
 // UI Automation Test
-export interface UitestLogData { line: string }
-export interface UitestDoneData { code: number; cycles: number; summaryReport: string | null; lastStatus: string }
-export interface UitestStatus { running: boolean; serial: string | null; startTime: number | null; cycles: number; lastStatus: string; summaryReport: string | null; logCount: number; recentLogs: string[] }
+export interface UitestLogData { line: string; serial?: string | null }
+export interface UitestDoneData { code: number; cycles: number; summaryReport: string | null; lastStatus: string; serial?: string | null }
+export interface UitestDeviceState { serial: string; running: boolean; startTime: number | null; cycles: number; lastStatus: string; summaryReport: string | null; logCount: number; recentLogs: string[] }
+export interface UitestStatus { running: boolean; serial: string | null; startTime: number | null; cycles: number; lastStatus: string; summaryReport: string | null; logCount: number; recentLogs: string[]; devices?: UitestDeviceState[] }
 export interface UitestReport { name: string; path: string; mtime: string }
 export interface UitestTestFile { name: string; path: string }
 

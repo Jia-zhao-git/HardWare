@@ -483,7 +483,7 @@ function App() {
             {activePage === 'app' && <AppPage {...pageProps} />}
             {activePage === 'script' && <ScriptEditorPage {...pageProps} />}
             {activePage === 'test' && <TestPage {...pageProps} />}
-            {activePage === 'uitest' && <UiTestPage selectedDevice={selectedDevice} showNotif={showNotif} />}
+            {activePage === 'uitest' && <UiTestPage selectedDevice={selectedDevice} devices={devices} showNotif={showNotif} />}
             {activePage === 'tools' && <ToolsPage {...pageProps} />}
             {activePage === 'files' && <FileManagerPage {...pageProps} />}
             {activePage === 'history' && <HistoryPage />}

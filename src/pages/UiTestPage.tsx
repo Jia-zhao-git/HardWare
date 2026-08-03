@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke, onUitestLog, onUitestDone } from '../api/electron-bridge'
+import type { AdbDevice } from '../api/electron-bridge'
 import {
   FlaskConical, Play, Square, RefreshCw, FileText,
   Activity, Clock, Terminal, Trash2, ChevronRight,
@@ -20,6 +21,7 @@ interface DeviceRunInfo {
 
 interface Props {
   selectedDevice: string
+  devices?: AdbDevice[]
   showNotif: (t: string, m: string) => void
 }
 
@@ -48,7 +50,16 @@ interface UitestTestFile {
 // Tab types
 type TabId = 'run' | 'edit' | 'reports'
 
-export default function UiTestPage({ selectedDevice, showNotif }: Props) {
+export default function UiTestPage({ selectedDevice, devices = [], showNotif }: Props) {
+  // Multi-device selection state
+  const onlineDevices = devices.filter(d => d.state === 'device')
+  const [selectedSerials, setSelectedSerials] = useState<string[]>([])
+  // Derive active serials: multi-select if available, else fall back to single selectedDevice
+  const activeSerials = selectedSerials.length > 0 ? selectedSerials : (selectedDevice ? [selectedDevice] : [])
+  const isMulti = activeSerials.length > 1
+  // Per-device log state (only used when multi)
+  const [deviceLogs, setDeviceLogs] = useState<Record<string, string[]>>({})
+  const [activeLogDevice, setActiveLogDevice] = useState<string>('')
   const [activeTab, setActiveTab] = useState<TabId>('run')
   const [tests, setTests] = useState<UitestTestFile[]>([])
   const [selectedTest, setSelectedTest] = useState('tests/all-apps.yaml')
@@ -115,7 +126,7 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
   }, [])
 
   useEffect(() => {
-    const unsubLog = onUitestLog(({ line }) => {
+    const unsubLog = onUitestLog(({ line, serial: logSerial }) => {
       // Detect device_info event in the log stream
       try {
         const obj = JSON.parse(line)
@@ -124,16 +135,24 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
           return  // don't add to log — shown in header card
         }
       } catch (_) {}
+      // Multi-device: route to per-device log
+      if (logSerial) {
+        setDeviceLogs(prev => ({
+          ...prev,
+          [logSerial]: [...(prev[logSerial] || []).slice(-1999), line]
+        }))
+      }
       setLogs(prev => [...prev.slice(-1999), line])
     })
-    const unsubDone = onUitestDone(({ code, cycles, summaryReport, lastStatus }) => {
+    const unsubDone = onUitestDone(({ code, cycles, summaryReport, lastStatus, serial: doneSN }) => {
       // Use ref to avoid stale closure (callback captured at mount with [] deps)
       const t0 = startTimeRef.current
       setStoppedElapsed(t0 ? Math.round((Date.now() - t0) / 1000) : 0)
       setStatus(prev => prev ? { ...prev, running: false, cycles, lastStatus, summaryReport } : null)
       stopPoll()
       loadReports()
-      showNotif(code === 0 ? 'success' : 'error', `测试完成: ${cycles} 轮, ${lastStatus}`)
+      const label = doneSN ? `[设备 ${doneSN.slice(-6)}] ` : ''
+      showNotif(code === 0 ? 'success' : 'error', `${label}测试完成: ${cycles} 轮, ${lastStatus}`)
       if (summaryReport) {
         setTimeout(() => {
           invoke('uitest_open_report', { reportPath: summaryReport })
@@ -151,21 +170,22 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
   }, [logs])
 
   const start = async () => {
-    if (!selectedDevice) { showNotif('warning', '请先连接设备'); return }
+    if (activeSerials.length === 0) { showNotif('warning', '请先连接设备'); return }
     setLogs([])
+    setDeviceLogs({})
     setDeviceInfo(null)
     setStoppedElapsed(0)
     startTimeRef.current = Date.now()
     runStartRef.current = null
     setActiveTab('run')
-    const r = await invoke<{ success: boolean; error?: string }>('uitest_start', {
-      serial: selectedDevice,
-      testFile: selectedTest,
-      loops,
-      durationMin: duration,
-    })
+    const ipcName = activeSerials.length > 1 ? 'uitest_start_multi' : 'uitest_start'
+    const payload = activeSerials.length > 1
+      ? { serials: activeSerials, testFile: selectedTest, loops, durationMin: duration }
+      : { serial: activeSerials[0], testFile: selectedTest, loops, durationMin: duration }
+    const r = await invoke<{ success: boolean; error?: string; results?: Record<string, { success: boolean; error?: string }> }>(ipcName, payload)
     if (r?.success) {
-      showNotif('success', 'UI 自动化测试已启动')
+      const label = activeSerials.length > 1 ? `已在 ${activeSerials.length} 台设备同时启动` : 'UI 自动化测试已启动'
+      showNotif('success', label)
       setStatus(prev => prev ? { ...prev, running: true } : null)
       startPoll()
     } else {
@@ -390,6 +410,38 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
         <div>
           <div className="card" style={{ marginBottom: 16 }}>
             <div className="card-title"><Settings size={14} /> 测试配置</div>
+            {/* ── Multi-device selector (shown when 2+ devices connected) ── */}
+            {onlineDevices.length > 1 && (
+              <div style={{ marginBottom: 10, padding: '8px 12px', background: 'rgba(88,166,255,0.06)', border: '1px solid rgba(88,166,255,0.2)', borderRadius: 6 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Activity size={12} /> 检测到 {onlineDevices.length} 台设备 — 选择执行设备（不选则使用当前设备）
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {onlineDevices.map(d => {
+                    const checked = selectedSerials.includes(d.serial)
+                    return (
+                      <label key={d.serial} style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+                        padding: '4px 10px', borderRadius: 4, fontSize: 12,
+                        background: checked ? 'rgba(16,185,129,0.12)' : 'var(--bg-card)',
+                        border: `1px solid ${checked ? '#10b981' : 'var(--border-color)'}`,
+                        color: checked ? '#10b981' : 'var(--text-primary)' }}>
+                        <input type="checkbox" checked={checked} style={{ display: 'none' }}
+                          onChange={e => setSelectedSerials(prev =>
+                            e.target.checked ? [...prev, d.serial] : prev.filter(s => s !== d.serial)
+                          )} />
+                        {checked ? <CheckCircle size={11} /> : <Activity size={11} />}
+                        {d.serial.slice(-8)}{d.model ? ` (${d.model})` : ''}
+                      </label>
+                    )
+                  })}
+                  <button style={{ fontSize: 11, padding: '4px 8px', background: 'none', border: '1px solid var(--border-color)', borderRadius: 4, cursor: 'pointer', color: 'var(--text-muted)' }}
+                    onClick={() => setSelectedSerials(selectedSerials.length === onlineDevices.length ? [] : onlineDevices.map(d => d.serial))}>
+                    {selectedSerials.length === onlineDevices.length ? '取消全部' : '全选'}
+                  </button>
+                </div>
+                {isMulti && <div style={{ fontSize: 11, color: '#ffb700', marginTop: 4 }}>将同时在 {activeSerials.length} 台设备上运行，各自生成独立报告</div>}
+              </div>
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 150px', gap: 12, marginBottom: 12 }}>
               <div>
                 <label style={{ display: 'block', fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>测试用例</label>
@@ -454,6 +506,17 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                 <Terminal size={13} style={{ color: 'var(--text-muted)' }} />
                 <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>实时日志（{logs.length} 行）</span>
+                {/* Multi-device log tabs */}
+                {isMulti && activeSerials.map(s => (
+                  <button key={s}
+                    onClick={() => setActiveLogDevice(activeLogDevice === s ? '' : s)}
+                    style={{ padding: '2px 8px', fontSize: 11, borderRadius: 4, cursor: 'pointer',
+                      background: activeLogDevice === s ? 'rgba(79,195,247,0.15)' : 'none',
+                      border: `1px solid ${activeLogDevice === s ? '#4fc3f7' : 'var(--border-color)'}`,
+                      color: activeLogDevice === s ? '#4fc3f7' : 'var(--text-muted)' }}>
+                    {s.slice(-6)}
+                  </button>
+                ))}
                 <label style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer' }}>
                   <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} /> 自动滚动
                 </label>
@@ -467,17 +530,22 @@ export default function UiTestPage({ selectedDevice, showNotif }: Props) {
                 borderRadius: 'var(--radius-md)', padding: '8px 12px',
                 fontFamily: 'monospace', fontSize: 11, lineHeight: 1.6, color: '#b0b0c0',
               }}>
-                {logs.length === 0
-                  ? <span style={{ color: '#444' }}>等待测试启动...</span>
-                  : logs.map((l, i) => (
-                    <div key={i} style={{
-                      color: l.includes('[ERR]') || l.includes('"failed"') || l.includes('failed_steps') ? '#e94560'
-                        : l.includes('"passed"') ? '#10b981'
-                        : l.includes('"warned"') ? '#ffb700'
-                        : l.includes('[DONE]') || l.includes('[START]') ? '#4fc3f7'
-                        : '#b0b0c0',
-                    }}>{l}</div>
-                  ))}
+                {(() => {
+                  const displayLogs = (isMulti && activeLogDevice && deviceLogs[activeLogDevice])
+                    ? deviceLogs[activeLogDevice]
+                    : logs
+                  return displayLogs.length === 0
+                    ? <span style={{ color: '#444' }}>{isMulti && activeLogDevice ? `等待 ${activeLogDevice.slice(-6)} 躺动...` : '等待测试启动...'}</span>
+                    : displayLogs.map((l, i) => (
+                      <div key={i} style={{
+                        color: l.includes('[ERR]') || l.includes('"failed"') || l.includes('failed_steps') ? '#e94560'
+                          : l.includes('"passed"') ? '#10b981'
+                          : l.includes('"warned"') ? '#ffb700'
+                          : l.includes('[DONE]') || l.includes('[START]') ? '#4fc3f7'
+                          : '#b0b0c0',
+                      }}>{l}</div>
+                    ))
+                })()}
               </div>
             </div>
           </div>
