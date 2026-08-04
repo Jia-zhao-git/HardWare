@@ -146,6 +146,8 @@ def cmd_run(args) -> int:
         # Only print key summary (not every step)
         failed = [s for s in result.steps if s.status == "failed"]
         warned = [s for s in result.steps if s.status == "warned"]
+        visual_bad = [s for s in result.steps
+                      if getattr(s, "visual", None) and s.visual not in ("normal", None)]
         mem = result.mem_series
         mem_delta = round((mem[-1]["mem_available_kb"] - mem[0]["mem_available_kb"]) / 1024, 1) if len(mem) >= 2 else None
         # Store only a lightweight summary in memory; full data is on disk in run.json
@@ -157,6 +159,8 @@ def cmd_run(args) -> int:
             "mem_avail_start": mem[0]["mem_available_kb"] if mem else 0,
             "mem_avail_end": mem[-1]["mem_available_kb"] if mem else 0,
             "failed_names": [s.name for s in failed[:5]],
+            "visual_bad": [f"{s.name}:{s.visual}" for s in visual_bad[:5]],
+            "visual_bad_count": len(visual_bad),
         })
         summary: dict = {
             "cycle": cycle,
@@ -168,6 +172,8 @@ def cmd_run(args) -> int:
         }
         if failed:
             summary["failed_steps"] = [s.name for s in failed[:5]]
+        if visual_bad:
+            summary["visual_issues"] = [f"{s.name}:{s.visual}" for s in visual_bad[:5]]
         if result.crash_issues:
             summary["crash_issues"] = [c.get("proc", "?") + ":" + c.get("issue", "?") for c in result.crash_issues]
         if result.crash_log:
@@ -232,6 +238,8 @@ def _write_summary_report(results: list, runs_dir: Path, total_sec: float) -> No
     warned = sum(1 for r in results if r["status"] == "warned")
     failed = sum(1 for r in results if r["status"] == "failed")
     crash_count = sum(1 for r in results if r.get("crash_issues"))
+    visual_cycles = sum(1 for r in results if r.get("visual_bad_count"))
+    visual_frames = sum(r.get("visual_bad_count", 0) for r in results)
 
     # collect per-cycle memory trend (mem_available at start/end of each cycle)
     mem_labels: list[str] = []
@@ -254,12 +262,19 @@ def _write_summary_report(results: list, runs_dir: Path, total_sec: float) -> No
 
         failed_cell = "; ".join(_html.escape(n) for n in r.get("failed_names", [])) or "-"
 
+        vb = r.get("visual_bad", [])
+        if vb:
+            visual_cell = f"<span class='failed'>{_html.escape('; '.join(vb))}</span>"
+        else:
+            visual_cell = "<span class='passed'>OK</span>"
+
         run_name = Path(r["run_dir"]).name
         # per-cycle report.html is intentionally not generated; link would be dead.
         # Show the run id as plain text (run dir may also be pruned on long runs).
         cycle_rows.append(
             f"<tr><td>{i}</td><td>{_html.escape(run_name)}</td>"
             f"<td class='{r['status']}'>{r['status']}</td><td>{crash_cell}</td>"
+            f"<td>{visual_cell}</td>"
             f"<td>{avail_s} MB</td><td>{avail_e} MB</td><td>{failed_cell}</td></tr>"
         )
 
@@ -288,6 +303,7 @@ canvas{{max-width:960px;width:100%;background:#fff;border:1px solid #ddd;display
   <div class='stat warned'>Warned: <b>{warned}</b></div>
   <div class='stat failed'>Failed: <b>{failed}</b></div>
   <div class='stat failed'>Crash events: <b>{crash_count}</b></div>
+  <div class='stat failed'>Visual issues: <b>{visual_frames}</b> frames / {visual_cycles} cycles</div>
 </div>
 
 <h2>Memory Available per Cycle (MB)</h2>
@@ -331,7 +347,7 @@ canvas{{max-width:960px;width:100%;background:#fff;border:1px solid #ddd;display
 </script>
 
 <h2>Cycle Detail</h2>
-<table><tr><th>#</th><th>Run ID</th><th>Status</th><th>Process Check</th><th>Mem Start</th><th>Mem End</th><th>Failed Steps</th></tr>
+<table><tr><th>#</th><th>Run ID</th><th>Status</th><th>Process Check</th><th>Visual Check</th><th>Mem Start</th><th>Mem End</th><th>Failed Steps</th></tr>
 {''.join(cycle_rows)}
 </table>
 </html>"""

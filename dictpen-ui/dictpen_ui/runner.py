@@ -17,6 +17,7 @@ from .input import InputDriver
 from .monitor import DeviceMonitor
 from .screenshot import ScreenshotDriver, files_differ, png_size, sha256_file
 from .simple_yaml import dump_json, load_simple_yaml
+from . import imgcheck
 
 # memory sample interval in seconds (0 = only at step boundaries)
 MEM_SAMPLE_INTERVAL = 0  # sample on every step that has capture=
@@ -33,6 +34,7 @@ class StepResult:
     command: Optional[str] = None
     elapsed_ms: int = 0
     mem_available_kb: Optional[int] = None
+    visual: Optional[str] = None  # auto visual health: normal|white|black|solid|error
 
 
 @dataclass
@@ -78,6 +80,7 @@ class TestRunner:
         self.screenshot = ScreenshotDriver(self.adb)
         self.monitor = DeviceMonitor(self.adb)
         self.ui_map = self._load_ui_map()
+        self._steps_dir: Path | None = None
 
     def _read_cfg_json(self) -> dict | None:
         """Read cfg.json from the device as a Python dict."""
@@ -113,6 +116,8 @@ class TestRunner:
         logs_dir = run_dir / "logs"
         steps_dir.mkdir(parents=True, exist_ok=True)
         logs_dir.mkdir(parents=True, exist_ok=True)
+        # expose for assertions that need to capture a live frame
+        self._steps_dir = steps_dir
 
         result = RunResult(run_id=run_id, test_name=spec.get("name", test_path.stem), device=self.info.to_dict(), run_dir=str(run_dir))
         dump_json(self.info.to_dict(), run_dir / "device-info.json")
@@ -462,6 +467,17 @@ class TestRunner:
                 pass
         finally:
             res.elapsed_ms = int((time.time() - start) * 1000)
+            # --- automatic visual health check on any screenshot this step produced ---
+            if res.screenshot and imgcheck.pil_available():
+                try:
+                    vr = imgcheck.analyze_screen(Path(res.screenshot))
+                    res.visual = vr["kind"]
+                    if not vr["ok"] and res.status == "passed":
+                        res.status = "warned"
+                        res.message = (res.message + "; " if res.message else "") + \
+                            f"auto-visual: {vr['message']}"
+                except Exception:
+                    pass
         return res
 
     def _capture(self, index: int, label: str, steps_dir: Path) -> Path:
@@ -533,6 +549,69 @@ class TestRunner:
                 threshold_mb = float(step.get("mem_delta_ok", -20))
                 if delta_mb < threshold_mb:
                     _fail(f"Memory drop too large: {delta_mb:.1f} MB (threshold {threshold_mb} MB)")
+
+        # --- visual: screen not blank/white/black/solid ---
+        if step.get("screen_ok") or "screen_ok" in step:
+            cap_key = step.get("screen_ok")
+            if isinstance(cap_key, str) and cap_key in captures:
+                shot = captures[cap_key]
+            else:
+                shot = self._capture(step.get("index", 998), "assert_screen_ok", self._steps_dir)
+                captures["_assert_screen_ok_"] = shot
+            try:
+                res = imgcheck.analyze_screen(
+                    shot,
+                    solid_std_max=float(step.get("solid_std_max", 4.0)),
+                    white_mean_min=float(step.get("white_mean_min", 245.0)),
+                    black_mean_max=float(step.get("black_mean_max", 10.0)),
+                )
+                if not res["ok"]:
+                    _fail(f"Abnormal screen: {res['message']}")
+            except RuntimeError as exc:
+                # Pillow missing -> warn, do not hard-fail the run
+                raise AssertionError("[warn] " + str(exc))
+
+        # --- visual: screen NOT frozen (changed vs a reference frame) ---
+        if "not_frozen_from" in step:
+            before_key = step["not_frozen_from"]
+            if before_key not in captures:
+                raise AssertionError(f"Capture not found: {before_key}")
+            before = captures[before_key]
+            cur_key = step.get("current")
+            if cur_key and cur_key in captures:
+                current = captures[cur_key]
+            else:
+                current = self._capture(step.get("index", 997), "assert_not_frozen", self._steps_dir)
+                captures["_assert_not_frozen_"] = current
+            try:
+                ratio = imgcheck.diff_ratio(before, current,
+                                            pixel_thresh=int(step.get("pixel_thresh", 12)))
+                min_ratio = float(step.get("min_change_ratio", 0.005))
+                if ratio < min_ratio:
+                    _fail(f"Screen appears frozen: only {ratio*100:.2f}% changed "
+                          f"(need >= {min_ratio*100:.2f}%) {before_key} -> live")
+            except RuntimeError as exc:
+                raise AssertionError("[warn] " + str(exc))
+
+        # --- visual: minimum change ratio between two captures ---
+        if "diff_ratio_min" in step:
+            before_key = step.get("diff_from")
+            cur_key = step.get("diff_to") or step.get("current")
+            if not before_key or before_key not in captures:
+                raise AssertionError(f"Capture not found: {before_key}")
+            before = captures[before_key]
+            if cur_key and cur_key in captures:
+                current = captures[cur_key]
+            else:
+                current = self._capture(step.get("index", 996), "assert_diff", self._steps_dir)
+            try:
+                ratio = imgcheck.diff_ratio(before, current,
+                                            pixel_thresh=int(step.get("pixel_thresh", 12)))
+                if ratio < float(step["diff_ratio_min"]):
+                    _fail(f"Insufficient screen change: {ratio*100:.2f}% "
+                          f"< {float(step['diff_ratio_min'])*100:.2f}%")
+            except RuntimeError as exc:
+                raise AssertionError("[warn] " + str(exc))
 
         # --- file exists ---
         if "file_exists" in step:

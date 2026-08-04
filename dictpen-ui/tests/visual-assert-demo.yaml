@@ -1,0 +1,71 @@
+# Visual assertion demo — shows the new image-based checks (第一项)
+# Requires Pillow on the host (pip install pillow). If missing, these
+# assertions degrade to WARN instead of failing the run.
+#
+# New assert keys:
+#   screen_ok: <capture-name|true>   -> fail/warn if white/black/solid/blank
+#   not_frozen_from: <capture-name>  -> fail/warn if screen did not change (frozen)
+#   diff_ratio_min: <0..1>           -> require at least this fraction changed
+#     (used with diff_from / diff_to)
+# Tuning knobs (all optional):
+#   solid_std_max, white_mean_min, black_mean_max, pixel_thresh,
+#   min_change_ratio, warn_only
+
+name: visual_assert_demo
+on_failure:
+  stop: false          # long-run friendly: a bad frame -> WARN, keep going
+steps:
+  - name: return_home
+    action: press_key
+    key: asr
+    wait: 1.0
+    capture: home
+
+  # 1) Home screen must not be blank/white/black/solid.
+  - name: assert_home_visible
+    action: assert
+    screen_ok: home
+    warn_only: false
+
+  - name: launch_settings
+    action: shell
+    command: miniapp_cli start 8080272425914438
+    wait: 2.5
+    capture: settings
+
+  # 2) Launching settings must actually change the screen (not frozen).
+  - name: assert_settings_changed
+    action: assert
+    not_frozen_from: home
+    current: settings
+    min_change_ratio: 0.02
+
+  # 3) Settings screen itself must be a real, content-bearing screen.
+  - name: assert_settings_visible
+    action: assert
+    screen_ok: settings
+
+  - name: scroll_in_settings
+    action: shell
+    command: send_event touch press 280 34; send_event touch slip 280 84; send_event touch slip 280 136; send_event touch release
+    wait: 0.8
+    capture: settings_scrolled
+
+  # 4) Scrolling should produce a meaningful visual change.
+  - name: assert_scroll_had_effect
+    action: assert
+    diff_ratio_min: 0.01
+    diff_from: settings
+    diff_to: settings_scrolled
+    warn_only: true
+
+  - name: exit_settings
+    action: press_key
+    key: asr
+    wait: 1.0
+    capture: back_home
+
+  # 5) Back to home must not leave a black/white screen (common crash symptom).
+  - name: assert_back_home_visible
+    action: assert
+    screen_ok: back_home
