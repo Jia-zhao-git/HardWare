@@ -101,8 +101,14 @@ class TestRunner:
 
     def run_test(self, test_path: Path, runs_dir: Path) -> RunResult:
         spec = load_simple_yaml(test_path)
-        run_id = time.strftime("%Y%m%d-%H%M%S")
+        # Use microsecond suffix to avoid run_id collision on fast cycles / concurrent devices
+        run_id = time.strftime("%Y%m%d-%H%M%S") + f"-{int((time.time() % 1) * 1000):03d}"
         run_dir = runs_dir / run_id
+        # Extremely defensive: if it somehow still exists, bump until unique
+        _bump = 0
+        while run_dir.exists():
+            _bump += 1
+            run_dir = runs_dir / f"{run_id}_{_bump}"
         steps_dir = run_dir / "steps"
         logs_dir = run_dir / "logs"
         steps_dir.mkdir(parents=True, exist_ok=True)

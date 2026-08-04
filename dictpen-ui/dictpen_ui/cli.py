@@ -83,7 +83,9 @@ def cmd_run(args) -> int:
     start_ts = time.time()
     cycle = 0
     last_status = "passed"
-    all_results: list = []
+    all_results: list = []  # lightweight per-cycle summaries only (avoid OOM on long runs)
+    consecutive_errors = 0
+    MAX_CONSECUTIVE_ERRORS = 10  # abort long run if device is gone / disk full
 
     # ── device info header (first log line) ──
     info = runner.info
@@ -119,13 +121,43 @@ def cmd_run(args) -> int:
 
         # Brief progress line — not the full step log
         print(json.dumps({"cycle": cycle, "elapsed_min": round(elapsed / 60, 1)}, ensure_ascii=False), flush=True)
-        result = runner.run_test(test_path, runs_dir)
+        try:
+            result = runner.run_test(test_path, runs_dir)
+            consecutive_errors = 0
+        except Exception as exc:
+            consecutive_errors += 1
+            print(json.dumps({
+                "cycle": cycle,
+                "status": "error",
+                "error": str(exc)[:200],
+                "consecutive_errors": consecutive_errors,
+            }, ensure_ascii=False), flush=True)
+            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                print(json.dumps({
+                    "info": "aborting: too many consecutive errors (device offline / disk full?)",
+                    "cycles": cycle - 1,
+                }, ensure_ascii=False), flush=True)
+                last_status = "failed"
+                break
+            time.sleep(3)  # back off before retry
+            continue
         last_status = result.status
-        all_results.append(result)
 
         # Only print key summary (not every step)
         failed = [s for s in result.steps if s.status == "failed"]
         warned = [s for s in result.steps if s.status == "warned"]
+        mem = result.mem_series
+        mem_delta = round((mem[-1]["mem_available_kb"] - mem[0]["mem_available_kb"]) / 1024, 1) if len(mem) >= 2 else None
+        # Store only a lightweight summary in memory; full data is on disk in run.json
+        all_results.append({
+            "run_id": result.run_id,
+            "run_dir": result.run_dir,
+            "status": result.status,
+            "crash_issues": result.crash_issues,
+            "mem_avail_start": mem[0]["mem_available_kb"] if mem else 0,
+            "mem_avail_end": mem[-1]["mem_available_kb"] if mem else 0,
+            "failed_names": [s.name for s in failed[:5]],
+        })
         summary: dict = {
             "cycle": cycle,
             "status": result.status,
@@ -140,11 +172,12 @@ def cmd_run(args) -> int:
             summary["crash_issues"] = [c.get("proc", "?") + ":" + c.get("issue", "?") for c in result.crash_issues]
         if result.crash_log:
             summary["crash_log_preview"] = result.crash_log[:200]
-        mem = result.mem_series
-        if len(mem) >= 2:
-            delta = round((mem[-1]["mem_available_kb"] - mem[0]["mem_available_kb"]) / 1024, 1)
-            summary["mem_delta_mb"] = delta
+        if mem_delta is not None:
+            summary["mem_delta_mb"] = mem_delta
         print(json.dumps(summary, ensure_ascii=False), flush=True)
+
+        # Free the heavy result object promptly
+        del result
 
         # Prune old run directories
         if args.keep_runs > 0:
@@ -195,10 +228,10 @@ def _write_summary_report(results: list, runs_dir: Path, total_sec: float) -> No
     out = runs_dir / f"summary-{summary_id}.html"
 
     total = len(results)
-    passed = sum(1 for r in results if r.status == "passed")
-    warned = sum(1 for r in results if r.status == "warned")
-    failed = sum(1 for r in results if r.status == "failed")
-    crash_count = sum(1 for r in results if r.crash_issues)
+    passed = sum(1 for r in results if r["status"] == "passed")
+    warned = sum(1 for r in results if r["status"] == "warned")
+    failed = sum(1 for r in results if r["status"] == "failed")
+    crash_count = sum(1 for r in results if r.get("crash_issues"))
 
     # collect per-cycle memory trend (mem_available at start/end of each cycle)
     mem_labels: list[str] = []
@@ -207,27 +240,26 @@ def _write_summary_report(results: list, runs_dir: Path, total_sec: float) -> No
     cycle_rows: list[str] = []
 
     for i, r in enumerate(results, start=1):
-        ms = r.mem_series
-        avail_s = round(ms[0]["mem_available_kb"] / 1024, 1) if ms else 0
-        avail_e = round(ms[-1]["mem_available_kb"] / 1024, 1) if ms else 0
+        avail_s = round(r.get("mem_avail_start", 0) / 1024, 1)
+        avail_e = round(r.get("mem_avail_end", 0) / 1024, 1)
         mem_labels.append(f"c{i}")
         mem_avail_start.append(avail_s)
         mem_avail_end.append(avail_e)
 
-        crash_cell = ""
-        if r.crash_issues:
-            names = ", ".join(c["proc"] + "(" + c["issue"] + ")" for c in r.crash_issues)
+        if r.get("crash_issues"):
+            names = ", ".join(c["proc"] + "(" + c["issue"] + ")" for c in r["crash_issues"])
             crash_cell = f"<span class='failed'>{_html.escape(names)}</span>"
         else:
             crash_cell = "<span class='passed'>OK</span>"
 
-        failed_steps = [s for s in r.steps if s.status == "failed"]
-        failed_cell = "; ".join(_html.escape(s.name) for s in failed_steps[:5]) or "-"
+        failed_cell = "; ".join(_html.escape(n) for n in r.get("failed_names", [])) or "-"
 
-        rel_report = Path(r.run_dir).name + "/report.html"
+        run_name = Path(r["run_dir"]).name
+        # per-cycle report.html is intentionally not generated; link would be dead.
+        # Show the run id as plain text (run dir may also be pruned on long runs).
         cycle_rows.append(
-            f"<tr><td>{i}</td><td><a href='{_html.escape(rel_report)}'>{_html.escape(Path(r.run_dir).name)}</a></td>"
-            f"<td class='{r.status}'>{r.status}</td><td>{crash_cell}</td>"
+            f"<tr><td>{i}</td><td>{_html.escape(run_name)}</td>"
+            f"<td class='{r['status']}'>{r['status']}</td><td>{crash_cell}</td>"
             f"<td>{avail_s} MB</td><td>{avail_e} MB</td><td>{failed_cell}</td></tr>"
         )
 
@@ -420,230 +452,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-def _write_summary_report(results: list, runs_dir: Path, total_sec: float) -> None:
-    import base64
-    import html as _html
-    import time as _time
-
-    if not results:
-        return
-
-    summary_id = _time.strftime("%Y%m%d-%H%M%S")
-    out = runs_dir / f"summary-{summary_id}.html"
-
-    total      = len(results)
-    passed     = sum(1 for r in results if r.status == "passed")
-    warned     = sum(1 for r in results if r.status == "warned")
-    failed_c   = sum(1 for r in results if r.status == "failed")
-    crash_count= sum(1 for r in results if r.crash_issues)
-    pass_rate  = round(passed / total * 100, 1) if total else 0
-
-    # ------------------------------------------------------------------
-    # Memory series across all cycles
-    # ------------------------------------------------------------------
-    mem_cycle_labels: list[str] = []
-    mem_avail_start:  list[float] = []
-    mem_avail_end:    list[float] = []
-    # fine-grained: every mem snapshot across all cycles in order
-    all_mem_ts:    list[float] = []
-    all_mem_avail: list[float] = []
-    all_mem_used:  list[float] = []
-    all_mem_xlabels: list[str] = []
-
-    for i, r in enumerate(results, start=1):
-        ms = r.mem_series
-        if ms:
-            avail_s = round(ms[0]["mem_available_kb"] / 1024, 1)
-            avail_e = round(ms[-1]["mem_available_kb"] / 1024, 1)
-        else:
-            avail_s = avail_e = 0
-        mem_cycle_labels.append(f"c{i}")
-        mem_avail_start.append(avail_s)
-        mem_avail_end.append(avail_e)
-        for snap in ms:
-            all_mem_ts.append(snap["ts"])
-            all_mem_avail.append(round(snap["mem_available_kb"] / 1024, 1))
-            all_mem_used.append(round(snap["mem_used_kb"] / 1024, 1))
-            # X label: actual HH:MM:SS timestamp
-            import datetime as _dt
-            ts_label = _dt.datetime.fromtimestamp(snap["ts"]).strftime("%H:%M:%S")
-            all_mem_xlabels.append(ts_label)
-
-    # ------------------------------------------------------------------
-    # Process PID comparison: first cycle start vs last cycle end
-    # ------------------------------------------------------------------
-    first_procs = results[0].proc_series[0]["procs"]  if results[0].proc_series else {}
-    last_procs  = results[-1].proc_series[-1]["procs"] if results[-1].proc_series else {}
-    all_proc_names = sorted(set(list(first_procs) + list(last_procs)))
-    proc_rows = "".join(
-        f"<tr><td>{_html.escape(n)}</td><td>{first_procs.get(n,'—')}</td><td>{last_procs.get(n,'—')}</td>"
-        f"<td class='{'passed' if first_procs.get(n)==last_procs.get(n) else 'failed'}'>"
-        f"{'OK' if first_procs.get(n)==last_procs.get(n) else 'CHANGED'}</td></tr>"
-        for n in all_proc_names
-    )
-
-    # ------------------------------------------------------------------
-    # Crash summary across all cycles
-    # ------------------------------------------------------------------
-    all_crashes: list[str] = []
-    for i, r in enumerate(results, start=1):
-        for c in r.crash_issues:
-            all_crashes.append(f"Cycle {i}: {c['proc']} — {c['issue']} (PID {c.get('original_pid','')} → {c.get('new_pid','')})")
-    crash_html = "".join(f"<li class='failed'>{_html.escape(s)}</li>" for s in all_crashes) if all_crashes else "<li class='passed'>No crashes detected</li>"
-
-    # ------------------------------------------------------------------
-    # Cycle table + failed step screenshots (base64 embedded)
-    # ------------------------------------------------------------------
-    def _img_b64(path_str: str) -> str:
-        try:
-            data = Path(path_str).read_bytes()
-            return "data:image/png;base64," + base64.b64encode(data).decode()
-        except Exception:
-            return ""
-
-    cycle_rows: list[str] = []
-    for i, r in enumerate(results, start=1):
-        ms = r.mem_series
-        avail_s = round(ms[0]["mem_available_kb"] / 1024, 1) if ms else 0
-        avail_e = round(ms[-1]["mem_available_kb"] / 1024, 1) if ms else 0
-        delta   = round(avail_e - avail_s, 1)
-        delta_cls = "failed" if delta < -5 else ("warned" if delta < 0 else "passed")
-
-        crash_cell = ""
-        if r.crash_issues:
-            names = ", ".join(c["proc"] + "(" + c["issue"] + ")" for c in r.crash_issues)
-            crash_cell = f"<span class='failed'>{_html.escape(names)}</span>"
-        else:
-            crash_cell = "<span class='passed'>OK</span>"
-
-        failed_steps = [s for s in r.steps if s.status == "failed"]
-        shot_cells = []
-        for s in failed_steps[:3]:
-            if s.screenshot:
-                src = _img_b64(s.screenshot)
-                if src:
-                    shot_cells.append(f"<div style='font-size:11px;color:#c00'>{_html.escape(s.name)}</div>"
-                                      f"<img src='{src}' style='max-width:300px;border:1px solid #c00'>")
-        failed_cell = "<br>".join(_html.escape(s.name) for s in failed_steps) or "-"
-        shots_html  = "".join(shot_cells) or "-"
-
-        cycle_rows.append(
-            f"<tr><td>{i}</td><td>{_html.escape(r.run_id)}</td>"
-            f"<td class='{r.status}'>{r.status}</td>"
-            f"<td>{crash_cell}</td>"
-            f"<td>{avail_s} MB</td><td>{avail_e} MB</td>"
-            f"<td class='{delta_cls}'>{'+' if delta>=0 else ''}{delta} MB</td>"
-            f"<td>{failed_cell}</td>"
-            f"<td>{shots_html}</td></tr>"
-        )
-
-    # JS data
-    _js = json.dumps
-    fine_avail_js  = _js(all_mem_avail)
-    fine_used_js   = _js(all_mem_used)
-    fine_xlabels_js= _js(all_mem_xlabels)
-    cycle_avail_s_js = _js(mem_avail_start)
-    cycle_avail_e_js = _js(mem_avail_end)
-    cycle_labels_js  = _js(mem_cycle_labels)
-
-    def _chart(canvas_id: str, labels_js: str, series: list[tuple[str, str, str]]) -> str:
-        """series = [(js_data, color, label_text), ...]"""
-        lines = []
-        for data_js, color, lbl in series:
-            lines.append(f"drawLine(ctx,{data_js},'{color}',false);")
-        legend = "".join(
-            f"ctx.fillStyle='{color}';ctx.fillRect(W-140,{8+12*k},14,4);"
-            f"ctx.fillStyle='#333';ctx.fillText('{lbl}',W-122,{16+12*k});"
-            for k,(_, color, lbl) in enumerate(series)
-        )
-        return f"""<canvas id="{canvas_id}" height="80"></canvas>
-<script>
-(function(){{
-  var labels={labels_js};
-  var c=document.getElementById('{canvas_id}');
-  var ctx=c.getContext('2d');
-  var W=c.offsetWidth||960,H=c.offsetHeight||160;
-  c.width=W;c.height=H;
-  var allVals=[].concat({''.join(d+',' for d,_,_ in series)});
-  var maxV=Math.max.apply(null,allVals)||1;
-  var minV=Math.min.apply(null,allVals);
-  var pad={{l:60,r:150,t:20,b:30}};
-  var w=W-pad.l-pad.r,h=H-pad.t-pad.b;
-  var n=labels.length;
-  function sx(i){{return pad.l+(n<2?w/2:i/(n-1)*w);}}
-  function sy(v){{return pad.t+h-((v-minV)/((maxV-minV)||1))*h;}}
-  ctx.strokeStyle='#eee';ctx.lineWidth=1;
-  for(var g=0;g<=4;g++){{var y=pad.t+g*h/4;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(pad.l+w,y);ctx.stroke();
-    ctx.fillStyle='#888';ctx.font='11px sans-serif';ctx.textAlign='right';
-    ctx.fillText(Math.round(minV+(maxV-minV)*(1-g/4))+'MB',pad.l-4,y+4);}}
-  function drawLine(ctx,data,color,dashed){{
-    ctx.strokeStyle=color;ctx.lineWidth=2;
-    if(dashed)ctx.setLineDash([4,3]);else ctx.setLineDash([]);
-    ctx.beginPath();
-    data.forEach(function(v,i){{i===0?ctx.moveTo(sx(i),sy(v)):ctx.lineTo(sx(i),sy(v));}});
-    ctx.stroke();ctx.setLineDash([]);
-  }}
-  {''.join(lines)}
-  var step=Math.max(1,Math.floor(n/16));
-  ctx.fillStyle='#555';ctx.font='10px sans-serif';ctx.textAlign='center';
-  labels.forEach(function(l,i){{if(i%step===0)ctx.fillText(l,sx(i),H-4);}});
-  ctx.textAlign='left';ctx.font='11px sans-serif';
-  {legend}
-}})();
-</script>"""
-
-    fine_chart  = _chart("fineChart",  fine_xlabels_js,
-                         [(fine_avail_js, "#1a7", "Available"), (fine_used_js, "#e44", "Used")])
-    cycle_chart = _chart("cycleChart", cycle_labels_js,
-                         [(cycle_avail_s_js, "#1a7", "Start avail"), (cycle_avail_e_js, "#e88", "End avail")])
-
-    body = f"""<!doctype html>
-<html lang="zh-CN"><meta charset="utf-8"><title>DictPen Summary Report</title>
-<style>
-body{{font-family:Segoe UI,Arial,sans-serif;margin:24px;background:#fafafa}}
-table{{border-collapse:collapse;width:100%;background:#fff;margin-bottom:16px}}
-td,th{{border:1px solid #ddd;padding:6px 8px;vertical-align:top}}
-th{{background:#f0f0f0}}
-.passed{{color:#148a08;font-weight:700}}
-.warned{{color:#b07800;font-weight:700}}
-.failed{{color:#c00;font-weight:700}}
-canvas{{max-width:960px;width:100%;background:#fff;border:1px solid #ddd;display:block;margin-bottom:24px}}
-.stat{{display:inline-block;margin:8px 12px 8px 0;padding:10px 18px;border:1px solid #ddd;background:#fff;border-radius:6px;font-size:18px;min-width:120px}}
-</style>
-<h1>DictPen UI Long-Run Summary Report</h1>
-<p>Generated: {_time.strftime('%Y-%m-%d %H:%M:%S')} &nbsp;&nbsp; Total runtime: <b>{round(total_sec/3600,2)} h</b>
- &nbsp;&nbsp; Test: {_html.escape(results[0].test_name)}</p>
-<div>
-  <div class='stat'>Cycles<br><b>{total}</b></div>
-  <div class='stat passed'>Passed<br><b>{passed} ({pass_rate}%)</b></div>
-  <div class='stat warned'>Warned<br><b>{warned}</b></div>
-  <div class='stat failed'>Failed<br><b>{failed_c}</b></div>
-  <div class='stat {'failed' if crash_count else 'passed'}'>Crash events<br><b>{crash_count}</b></div>
-</div>
-
-<h2>Memory — Fine-Grained (all steps)</h2>
-{fine_chart}
-
-<h2>Memory — Per-Cycle Available (MB)</h2>
-{cycle_chart}
-
-<h2>Process PID Check (first cycle start → last cycle end)</h2>
-<table><tr><th>Process</th><th>Start PID</th><th>End PID</th><th>Status</th></tr>
-{proc_rows}
-</table>
-
-<h2>Crash / Restart Events</h2>
-<ul>{crash_html}</ul>
-
-<h2>Device Crash Log (last run)</h2>
-<pre style='background:#0a0a1a;color:#e94560;padding:10px;border-radius:6px;font-size:11px;max-height:300px;overflow-y:auto'>{_html.escape(results[-1].crash_log if results and results[-1].crash_log else 'No crash log entries.')}</pre>
-
-<h2>Cycle Detail</h2>
-<table>
-<tr><th>#</th><th>Run ID</th><th>Status</th><th>Process</th><th>Mem Start</th><th>Mem End</th><th>Δ Mem</th><th>Failed Steps</th><th>Screenshots</th></tr>
-{''.join(cycle_rows)}
-</table>
-</html>"""
-
-    out.write_text(body, encoding="utf-8")
-    print(json.dumps({"summary_report": str(out)}, ensure_ascii=False, indent=2))
