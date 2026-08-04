@@ -79,7 +79,7 @@ class CoordinateAdapter:
             try:
                 calib = json.loads(calib_file.read_text(encoding="utf-8"))
                 if calib.get("calibrated"):
-                    return cls(
+                    inst = cls(
                         phys_w=calib.get("phys_w", 560),
                         phys_h=calib.get("phys_h", 170),
                         direction=calib.get("direction", 0),
@@ -88,6 +88,10 @@ class CoordinateAdapter:
                         tp_yoffset=calib.get("tp_yoffset", 0),
                         sku=sku,
                     )
+                    # Load empirical linear mapping if present
+                    if "ss_to_touch" in calib:
+                        inst._ss_to_touch_linear = calib["ss_to_touch"]
+                    return inst
             except Exception:
                 pass
         # 2. Try cfg.json
@@ -124,6 +128,9 @@ class CoordinateAdapter:
         self.tp_xoffset = tp_xoffset
         self.tp_yoffset = tp_yoffset
         self.sku = sku
+        # Optional empirical linear mapping (from ss_to_touch in calibration file)
+        # Format: {x_scale, x_offset, y_scale, y_offset}
+        self._ss_to_touch_linear: dict | None = None
 
     # ── screenshot size ──────────────────────────────────────────────
 
@@ -144,6 +151,12 @@ class CoordinateAdapter:
     # ── screenshot → touch ───────────────────────────────────────────
 
     def screenshot_to_touch(self, sx: int, sy: int) -> Point:
+        # Use empirical linear mapping if available (highest priority)
+        if self._ss_to_touch_linear:
+            m = self._ss_to_touch_linear
+            tx = int(m["x_scale"] * sx + m["x_offset"])
+            ty = int(m["y_scale"] * sy + m["y_offset"])
+            return Point(max(0, tx), max(0, ty))
         if self.tp_direction == self.direction:
             return self._direct_map(sx, sy, self.direction)
         else:

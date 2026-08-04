@@ -1,0 +1,19 @@
+{
+  "sku": "OVERHEAD_Y15D_SKU_CHN_STD",
+  "phys_w": 640,
+  "phys_h": 172,
+  "direction": 270,
+  "tp_direction": 0,
+  "tp_xoffset": 0,
+  "tp_yoffset": 0,
+  "calibrated": true,
+  "note": "empirical_fit_3points: ss_to_touch formula: tx=0.9812*sx+11.17, ty=1.2087*sy-23.43",
+  "touch_x_range": [64, 576],
+  "touch_y_range": [0, 154],
+  "ss_to_touch": {
+    "x_scale": 0.9812,
+    "x_offset": 11.17,
+    "y_scale": 1.2087,
+    "y_offset": -23.43
+  }
+}
