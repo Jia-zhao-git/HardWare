@@ -506,6 +506,44 @@ async function uitest_delete_report(event, { reportPath }) {
 }
 
 // --------------------------------------------------------------------------
+// --------------------------------------------------------------------------
+// uitest_gen_report -- manually generate summary report, optionally filter by device serial
+// --------------------------------------------------------------------------
+async function uitest_gen_report(event, { serial } = {}) {
+    const win = event.sender ? require('electron').BrowserWindow.fromWebContents(event.sender) : null;
+    if (!fs.existsSync(RUNS_DIR)) return { success: false, error: 'No runs directory' };
+    try {
+        const allDirs = fs.readdirSync(RUNS_DIR)
+            .filter(f => { const p = path.join(RUNS_DIR, f, 'run.json'); return fs.existsSync(p); })
+            .sort().slice(-200);
+        const runDirs = serial
+            ? allDirs.filter(d => {
+                try {
+                    const r = JSON.parse(fs.readFileSync(path.join(RUNS_DIR, d, 'run.json'), 'utf8'));
+                    return r.device && r.device.serial === serial;
+                } catch (_) { return false; }
+              })
+            : allDirs;
+        if (runDirs.length === 0)
+            return { success: false, error: serial ? `No runs found for device ${serial}` : 'No runs found' };
+        const results = [];
+        for (const d of runDirs) {
+            try { results.push(JSON.parse(fs.readFileSync(path.join(RUNS_DIR, d, 'run.json'), 'utf8'))); } catch (_) {}
+        }
+        const now = new Date();
+        const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}-${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
+        const snSuffix = serial ? `-${serial.slice(-8)}` : '';
+        const outPath = path.join(RUNS_DIR, `summary-${ts}${snSuffix}.html`);
+        _generate_report_from_runs(win, serial || null);
+        if (win && !win.isDestroyed()) {
+            win.webContents.send('uitest_log', { line: `[REPORT] Manual report generated: ${path.basename(outPath)}`, serial: serial || null });
+        }
+        return { success: true, reportPath: outPath, cycleCount: results.length };
+    } catch (e) {
+        return { success: false, error: String(e) };
+    }
+}
+
 // uitest_list_tests  �?list .yaml files in tests/
 // --------------------------------------------------------------------------
 async function uitest_list_tests(event, {}) {
@@ -611,6 +649,7 @@ function register(ipcMain) {
     ipcMain.handle('uitest_list_reports', uitest_list_reports);
     ipcMain.handle('uitest_open_report',  uitest_open_report);
     ipcMain.handle('uitest_delete_report',uitest_delete_report);
+    ipcMain.handle('uitest_gen_report',    uitest_gen_report);
     ipcMain.handle('uitest_list_tests',   uitest_list_tests);
     ipcMain.handle('uitest_get_logs',     uitest_get_logs);
     ipcMain.handle('uitest_read_test',    uitest_read_test);

@@ -5,7 +5,7 @@ import {
   FlaskConical, Play, Square, RefreshCw, FileText,
   Activity, Clock, Terminal, Trash2, ChevronRight,
   Loader, ExternalLink, Settings, Edit3, Save, X,
-  Zap, RotateCcw, FilePlus, CheckCircle, AlertTriangle
+  Zap, RotateCcw, FilePlus, CheckCircle, AlertTriangle, PlusCircle
 } from 'lucide-react'
 
 interface Template { name: string; label: string; description: string; content: string }
@@ -49,6 +49,67 @@ interface UitestTestFile {
 
 // Tab types
 type TabId = 'run' | 'edit' | 'reports'
+
+// --------------------------------------------------------------------------
+// GenReportPanel — manual report generation for a specific device
+// --------------------------------------------------------------------------
+function GenReportPanel({ devices, selectedDevice, showNotif, onGenerated }: {
+  devices: AdbDevice[]
+  selectedDevice: string
+  showNotif: (t: string, m: string) => void
+  onGenerated: () => void
+}) {
+  const [genSerial, setGenSerial] = useState('')
+  const [genLoading, setGenLoading] = useState(false)
+
+  const handleGen = async () => {
+    setGenLoading(true)
+    try {
+      const serial = genSerial || undefined
+      const r = await invoke<{ success: boolean; error?: string; reportPath?: string; cycleCount?: number }>(
+        'uitest_gen_report', serial ? { serial } : {}
+      )
+      if (r?.success) {
+        const label = serial ? `[${serial.slice(-6)}] ` : ''
+        showNotif('success', `${label}报告已生成（${r.cycleCount} 轮数据）`)
+        onGenerated()
+        if (r.reportPath) invoke('uitest_open_report', { reportPath: r.reportPath })
+      } else {
+        showNotif('error', r?.error || '生成失败')
+      }
+    } finally {
+      setGenLoading(false)
+    }
+  }
+
+  return (
+    <div style={{ marginBottom: 12, padding: '10px 12px', background: 'rgba(79,195,247,0.04)', border: '1px solid rgba(79,195,247,0.15)', borderRadius: 6 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
+        <PlusCircle size={12} /> 手动生成报告（基于已保存的测试数据）
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select value={genSerial} onChange={e => setGenSerial(e.target.value)}
+          style={{ padding: '6px 10px', background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 4, color: 'var(--text-primary)', fontSize: 12, minWidth: 160 }}>
+          <option value="">全部设备（所有 runs）</option>
+          {devices.map(d => (
+            <option key={d.serial} value={d.serial}>{d.serial.slice(-10)}{d.model ? ` ${d.model}` : ''}</option>
+          ))}
+          {selectedDevice && !devices.find(d => d.serial === selectedDevice) && (
+            <option value={selectedDevice}>{selectedDevice.slice(-10)} (当前)</option>
+          )}
+        </select>
+        <button className="btn btn-sm btn-primary" onClick={handleGen} disabled={genLoading}
+          style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 14px', fontSize: 12 }}>
+          {genLoading ? <Loader size={11} style={{ animation: 'spin 1s linear infinite' }} /> : <FileText size={11} />}
+          {genLoading ? '生成中...' : '生成报告'}
+        </button>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          选具体设备可按 SN 筛选运行记录
+        </span>
+      </div>
+    </div>
+  )
+}
 
 export default function UiTestPage({ selectedDevice, devices = [], showNotif }: Props) {
   // Multi-device selection state
@@ -826,6 +887,8 @@ steps:                 # 步骤列表 (每个以 - name: 开头)
               </button>
             </div>
           </div>
+          {/* ── Manual Generate Report ── */}
+          <GenReportPanel devices={onlineDevices} selectedDevice={activeSerials[0] || selectedDevice} showNotif={showNotif} onGenerated={loadReports} />
           {reports.length === 0 ? (
             <div style={{ padding: '24px 0', color: 'var(--text-muted)', fontSize: 13, textAlign: 'center' }}>
               暂无报告，运行测试后自动生成
