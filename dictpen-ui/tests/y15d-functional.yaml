@@ -1,0 +1,251 @@
+# Y15D 专项功能测试 — 设备 7G70700012203320
+# SKU: OVERHEAD_Y15D_SKU_CHN_STD  屏幕: 640x172  direction=270 tp_direction=0
+#
+# 覆盖核心功能路径：
+#   1. 首页可见性验证（OCR 识别三大入口）
+#   2. 查词翻译（有道词典）— 进入 + 内容断言 + 错误监控
+#   3. 单词本 — 进入 + 内容断言
+#   4. 历史记录 — 进入 + 内容断言
+#   5. 设置 — 进入 + 内容断言
+#   6. 听力精选 — 进入 + 内容断言
+#   7. 全程自动白屏/黑屏检测（无需额外配置，每帧自动执行）
+#   8. 全程 OCR 错误词扫描（无需额外配置，每帧自动执行）
+#
+# 运行方式：
+#   在 UI 自动化页选择设备 7G70700012203320，选择此测试文件，点击开始
+
+name: y15d_functional_test
+on_failure:
+  stop: false    # 单个功能失败不中断，继续测试其他功能
+
+steps:
+  # =========================================================
+  # 0. 返回首页基准
+  # =========================================================
+  - name: return_home
+    action: press_key
+    key: asr
+    wait: 1.5
+    capture: home
+
+  - name: assert_home_visible
+    action: assert
+    screen_ok: home
+    warn_only: false
+
+  - name: assert_home_has_main_entries
+    action: assert
+    ocr_contains: "查词翻译"
+    capture: home
+    fuzzy: true
+    warn_only: false
+
+  - name: assert_home_no_errors
+    action: assert
+    ocr_check_errors: true
+    capture: home
+    warn_only: true
+
+  # =========================================================
+  # 1. 查词翻译（有道词典）
+  # =========================================================
+  - name: launch_dict
+    action: shell
+    command: miniapp_cli start 8080252464522508
+    wait: 3.0
+    capture: dict_home
+
+  - name: assert_dict_changed
+    action: assert
+    not_frozen_from: home
+    current: dict_home
+    min_change_ratio: 0.01
+
+  - name: assert_dict_visible
+    action: assert
+    screen_ok: dict_home
+
+  # 年级选择页 or 查词主页，两者都接受
+  - name: assert_dict_content
+    action: assert
+    ocr_not_contains: ["错误", "失败", "加载失败", "网络错误", "服务不可用"]
+    capture: dict_home
+    warn_only: true
+
+  # 如果出现年级选择页，选"高中"
+  - name: select_grade_if_shown
+    action: tap_ocr
+    text: "高中"
+    optional: true
+    wait: 1.5
+    capture: dict_after_grade
+
+  - name: exit_dict
+    action: press_key
+    key: asr
+    wait: 1.2
+    capture: home_after_dict
+
+  - name: assert_home_restored_after_dict
+    action: assert
+    screen_ok: home_after_dict
+    warn_only: true
+
+  # =========================================================
+  # 2. 单词本
+  # =========================================================
+  - name: launch_wordbook
+    action: shell
+    command: miniapp_cli start 8080212246010681
+    wait: 2.5
+    capture: wordbook
+
+  - name: assert_wordbook_changed
+    action: assert
+    not_frozen_from: home_after_dict
+    current: wordbook
+    min_change_ratio: 0.01
+
+  - name: assert_wordbook_visible
+    action: assert
+    screen_ok: wordbook
+
+  - name: assert_wordbook_no_errors
+    action: assert
+    ocr_check_errors: true
+    capture: wordbook
+    warn_only: true
+
+  - name: scroll_wordbook
+    action: random_swipe
+    dirs: [up, down]
+    margin: 0.2
+    wait: 0.8
+    capture: wordbook_scrolled
+
+  - name: assert_wordbook_scrolled_ok
+    action: assert
+    screen_ok: wordbook_scrolled
+    warn_only: true
+
+  - name: exit_wordbook
+    action: press_key
+    key: asr
+    wait: 1.0
+
+  # =========================================================
+  # 3. 历史记录
+  # =========================================================
+  - name: launch_history
+    action: shell
+    command: miniapp_cli start 8080292157485624
+    wait: 2.5
+    capture: history
+
+  - name: assert_history_visible
+    action: assert
+    screen_ok: history
+
+  - name: assert_history_no_errors
+    action: assert
+    ocr_check_errors: true
+    capture: history
+    warn_only: true
+
+  - name: exit_history
+    action: press_key
+    key: asr
+    wait: 1.0
+
+  # =========================================================
+  # 4. 设置
+  # =========================================================
+  - name: launch_settings
+    action: shell
+    command: miniapp_cli start 8080272425914438
+    wait: 2.5
+    capture: settings
+
+  - name: assert_settings_visible
+    action: assert
+    screen_ok: settings
+
+  - name: assert_settings_has_text
+    action: assert
+    ocr_check_errors: true
+    capture: settings
+    warn_only: true
+
+  - name: scroll_settings
+    action: random_swipe
+    dirs: [up, down]
+    margin: 0.2
+    wait: 0.8
+    capture: settings_scrolled
+
+  - name: assert_settings_scroll_ok
+    action: assert
+    screen_ok: settings_scrolled
+    warn_only: true
+
+  - name: exit_settings
+    action: press_key
+    key: asr
+    wait: 1.0
+
+  # =========================================================
+  # 5. 听力精选
+  # =========================================================
+  - name: launch_listening
+    action: shell
+    command: miniapp_cli start 8080232418330628
+    wait: 3.0
+    capture: listening
+
+  - name: assert_listening_visible
+    action: assert
+    screen_ok: listening
+
+  - name: assert_listening_no_errors
+    action: assert
+    ocr_check_errors: true
+    capture: listening
+    warn_only: true
+
+  - name: exit_listening
+    action: press_key
+    key: asr
+    wait: 1.0
+
+  # =========================================================
+  # 6. 最终检查：回首页，内存和进程健康
+  # =========================================================
+  - name: final_return_home
+    action: press_key
+    key: asr
+    wait: 1.5
+    capture: final_home
+
+  - name: assert_final_home_visible
+    action: assert
+    screen_ok: final_home
+    warn_only: false
+
+  - name: assert_final_home_entries
+    action: assert
+    ocr_contains: "查词翻译"
+    capture: final_home
+    fuzzy: true
+    warn_only: true
+
+  - name: assert_proc_alive
+    action: assert
+    proc_alive:
+      - miniapp
+      - adbd
+    warn_only: false
+
+  - name: assert_memory_ok
+    action: assert
+    mem_delta_ok: -30    # 整轮测试可用内存下降不超过 30MB
+    warn_only: true
