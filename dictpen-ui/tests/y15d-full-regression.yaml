@@ -1,0 +1,578 @@
+# Y15D 全功能深度回归测试 — 设备 7G70700012203320
+# SKU: OVERHEAD_Y15D_SKU_CHN_STD  坐标: 0.9812*sx+11.17 / 1.2087*sy-23.43
+#
+# 设计原则：
+#   1. 每个 APP 启动 → 视觉断言 → 内容断言 → 内部交互 → 退出
+#   2. 交互优先用 miniapp_cli start（可靠启动），内部导航用 OCR 点击
+#   3. 每帧自动白屏/黑屏检测 + OCR 错误词扫描（零配置）
+#   4. 已知问题标记 warn_only（有道词典空白、网络依赖 APP）
+#   5. 最终检查内存/进程/崩溃，确保长跑稳定性
+#
+# 预期单轮耗时：约 5-7 分钟（720min 可跑 ~100-140 轮）
+# 已排除：有道词典（启动空白）、喜马拉雅少儿（需联网）
+
+name: y15d_full_regression
+on_failure:
+  stop: false
+
+steps:
+  # =========================================================
+  # 0. 首页基准
+  # =========================================================
+  - name: return_home
+    action: press_key
+    key: asr
+    wait: 1.5
+    capture: home
+
+  - name: assert_home_ok
+    action: assert
+    screen_ok: home
+    warn_only: false
+
+  - name: assert_home_content
+    action: assert
+    ocr_contains: "查词翻译"
+    capture: home
+    fuzzy: true
+    warn_only: false
+
+  - name: assert_home_no_errors
+    action: assert
+    ocr_check_errors: true
+    capture: home
+    warn_only: true
+
+  # =========================================================
+  # 1. 单词本 — 最核心数据 APP
+  # =========================================================
+  - name: launch_wordbook
+    action: shell
+    command: miniapp_cli start 8080212246010681
+    wait: 2.5
+    capture: wb
+
+  - name: assert_wb_visible
+    action: assert
+    screen_ok: wb
+    warn_only: false
+
+  - name: assert_wb_changed
+    action: assert
+    not_frozen_from: home
+    current: wb
+    min_change_ratio: 0.01
+    warn_only: false
+
+  # 1a. OCR 识别当前屏幕文字，保存供后续断言
+  - name: ocr_wordbook
+    action: ocr
+    capture: wb
+
+  - name: assert_wb_no_error
+    action: assert
+    ocr_check_errors: true
+    capture: wb
+    warn_only: true
+
+  # 1b. 如果"单词"tab 可见，点"句子"切换到句子 tab
+  - name: tap_sentence_tab
+    action: tap_ocr
+    text: "句子"
+    optional: true
+    wait: 1.5
+    capture: wb_sentence
+
+  - name: assert_sentence_tab_ok
+    action: assert
+    screen_ok: wb_sentence
+    warn_only: true
+
+  # 1c. 切回"单词"tab
+  - name: tap_word_tab
+    action: tap_ocr
+    text: "单词"
+    optional: true
+    wait: 1.5
+    capture: wb_word
+
+  # 1d. 滚动浏览更多内容
+  - name: scroll_wordbook_down
+    action: random_swipe
+    dirs: [up]
+    count: 3
+    margin: 0.15
+    wait: 0.5
+    capture: wb_scroll1
+
+  - name: assert_wb_scroll_ok
+    action: assert
+    screen_ok: wb_scroll1
+    warn_only: true
+
+  # 1e. 退出
+  - name: exit_wordbook
+    action: press_key
+    key: asr
+    wait: 1.0
+    capture: home_after_wb
+
+  - name: assert_back_from_wb_ok
+    action: assert
+    screen_ok: home_after_wb
+    warn_only: true
+
+  # =========================================================
+  # 2. 听力精选 — 多媒体内容 APP（内部导航验证）
+  # =========================================================
+  - name: launch_listening
+    action: shell
+    command: miniapp_cli start 8080232418330628
+    wait: 3.0
+    capture: listen
+
+  - name: assert_listen_visible
+    action: assert
+    screen_ok: listen
+    warn_only: false
+
+  - name: assert_listen_changed
+    action: assert
+    not_frozen_from: home_after_wb
+    current: listen
+    min_change_ratio: 0.01
+    warn_only: false
+
+  - name: ocr_listening
+    action: ocr
+    capture: listen
+
+  - name: assert_listen_no_net_error
+    action: assert
+    ocr_not_contains: ["网络异常", "请连接网络", "连接网络超时"]
+    capture: listen
+    use_default_errors: true
+    warn_only: true
+    # 测试设备未联网时可接受
+
+  # 2a. 如果底部 Tab 可见，点击"我的收藏"
+  - name: tap_my_fav_listen
+    action: tap_ocr
+    text: "我的收藏"
+    optional: true
+    wait: 2.0
+    capture: listen_fav
+
+  - name: assert_listen_fav_ok
+    action: assert
+    screen_ok: listen_fav
+    warn_only: true
+
+  # 2b. 收藏页滚动
+  - name: scroll_fav
+    action: random_swipe
+    dirs: [up]
+    count: 2
+    margin: 0.15
+    wait: 0.5
+    capture: listen_fav_scroll
+
+  - name: assert_fav_scroll_ok
+    action: assert
+    screen_ok: listen_fav_scroll
+    warn_only: true
+
+  # 2c. 逐个点击底部推荐分类（双语推荐/英文分级听单等）
+  - name: tap_bilingual
+    action: tap_ocr
+    text: "双语推荐"
+    optional: true
+    wait: 2.0
+    capture: listen_bilingual
+
+  - name: assert_bilingual_ok
+    action: assert
+    screen_ok: listen_bilingual
+    warn_only: true
+
+  # 2d. 退出（可能需按多次退出深层页面）
+  - name: back_from_listen_1
+    action: press_key
+    key: asr
+    wait: 0.6
+  - name: back_from_listen_2
+    action: press_key
+    key: asr
+    wait: 0.6
+  - name: back_from_listen_3
+    action: press_key
+    key: asr
+    wait: 0.6
+
+  # =========================================================
+  # 3. 设置 — 验证系统功能页面
+  # =========================================================
+  - name: launch_settings
+    action: shell
+    command: miniapp_cli start 8080272425914438
+    wait: 2.5
+    capture: settings
+
+  - name: assert_settings_visible
+    action: assert
+    screen_ok: settings
+    warn_only: false
+
+  - name: assert_settings_changed
+    action: assert
+    not_frozen_from: listen_bilingual
+    current: settings
+    min_change_ratio: 0.01
+    warn_only: false
+
+  - name: ocr_settings
+    action: ocr
+    capture: settings
+
+  - name: assert_settings_no_error
+    action: assert
+    ocr_check_errors: true
+    capture: settings
+    warn_only: true
+
+  # 3a. 点击"网络"进入 Wi-Fi 设置（不操作，仅验证能进入）
+  - name: tap_network_setting
+    action: tap_ocr
+    text: "网络"
+    fuzzy: true
+    optional: true
+    wait: 2.0
+    capture: settings_network
+
+  - name: assert_network_page_ok
+    action: assert
+    screen_ok: settings_network
+    ocr_not_contains: ["忽略此网络"]
+    capture: settings_network
+    warn_only: true
+    # 不点"忽略此网络"，避免断网
+
+  # 3b. 返回设置主页
+  - name: back_network_to_settings
+    action: press_key
+    key: asr
+    wait: 0.8
+    capture: settings_again
+
+  # 3c. 滚动设置页
+  - name: scroll_settings
+    action: random_swipe
+    dirs: [up, down]
+    count: 2
+    margin: 0.15
+    wait: 0.5
+    capture: settings_scroll
+
+  - name: assert_settings_scroll_ok
+    action: assert
+    screen_ok: settings_scroll
+    warn_only: true
+
+  # 3d. 退出
+  - name: exit_settings
+    action: press_key
+    key: asr
+    wait: 1.0
+
+  # =========================================================
+  # 4. 历史记录 — 核心用户数据页
+  # =========================================================
+  - name: launch_history
+    action: shell
+    command: miniapp_cli start 8080292157485624
+    wait: 2.5
+    capture: history
+
+  - name: assert_history_visible
+    action: assert
+    screen_ok: history
+    warn_only: false
+
+  - name: assert_history_changed
+    action: assert
+    not_frozen_from: settings_scroll
+    current: history
+    min_change_ratio: 0.01
+    warn_only: false
+
+  - name: assert_history_no_error
+    action: assert
+    ocr_check_errors: true
+    capture: history
+    warn_only: true
+
+  # 4a. 如果有记录，滚动查看
+  - name: scroll_history
+    action: random_swipe
+    dirs: [up]
+    count: 2
+    margin: 0.15
+    wait: 0.5
+    capture: history_scroll
+
+  - name: assert_history_scroll_ok
+    action: assert
+    screen_ok: history_scroll
+    warn_only: true
+
+  # 4b. 退出
+  - name: exit_history
+    action: press_key
+    key: asr
+    wait: 1.0
+
+  # =========================================================
+  # 5. 个人中心
+  # =========================================================
+  - name: launch_user_center
+    action: shell
+    command: miniapp_cli start 8080282263329158
+    wait: 2.5
+    capture: user_center
+
+  - name: assert_user_center_ok
+    action: assert
+    screen_ok: user_center
+    warn_only: false
+
+  - name: assert_user_center_text
+    action: assert
+    ocr_not_contains: ["错误", "失败", "加载失败"]
+    capture: user_center
+    warn_only: true
+
+  # 5a. 滚动
+  - name: scroll_user_center
+    action: random_swipe
+    dirs: [up]
+    count: 2
+    margin: 0.15
+    wait: 0.5
+    capture: ucenter_scroll
+
+  - name: exit_user_center
+    action: press_key
+    key: asr
+    wait: 1.0
+
+  # =========================================================
+  # 6. 英语同步学（教材）
+  # =========================================================
+  - name: launch_textbook
+    action: shell
+    command: miniapp_cli start 8080212335092787
+    wait: 3.0
+    capture: textbook
+
+  - name: assert_textbook_visible
+    action: assert
+    screen_ok: textbook
+    warn_only: false
+
+  - name: assert_textbook_changed
+    action: assert
+    not_frozen_from: ucenter_scroll
+    current: textbook
+    min_change_ratio: 0.01
+    warn_only: false
+
+  - name: assert_textbook_no_error
+    action: assert
+    ocr_check_errors: true
+    capture: textbook
+    warn_only: true
+
+  # 6a. 如果有年级选择，尝试选择
+  - name: tap_grade_if_shown
+    action: tap_ocr
+    text: "高中"
+    optional: true
+    wait: 2.0
+    capture: textbook_grade
+
+  - name: exit_textbook
+    action: press_key
+    key: asr
+    wait: 1.0
+
+  # =========================================================
+  # 7. 有道词典（已知可能空白，仅做存在性检查）
+  # =========================================================
+  - name: launch_dict
+    action: shell
+    command: miniapp_cli start 8080252464522508
+    wait: 3.0
+    capture: dict
+
+  - name: assert_dict_launched
+    action: assert
+    screen_ok: dict
+    warn_only: true
+    # 已知 Y15D 有道词典启动可能空白，仅 WARN
+
+  - name: assert_dict_no_error_text
+    action: assert
+    ocr_not_contains: ["错误", "崩溃", "失败", "无响应"]
+    capture: dict
+    warn_only: true
+
+  # 7a. 尝试年级选择
+  - name: tap_grade_dict
+    action: tap_ocr
+    text: "高中"
+    optional: true
+    wait: 2.0
+    capture: dict_after_grade
+
+  - name: exit_dict
+    action: press_key
+    key: asr
+    wait: 1.0
+
+  # =========================================================
+  # 8. 喜马拉雅少儿（网络依赖，warn_only）
+  # =========================================================
+  - name: launch_ximalaya
+    action: shell
+    command: miniapp_cli start 8080292001695606
+    wait: 4.0
+    capture: xmly
+
+  - name: assert_xmly_launched
+    action: assert
+    screen_ok: xmly
+    warn_only: true
+    # 需联网，测试设备未联网时仅 WARN
+
+  - name: assert_xmly_no_crash
+    action: assert
+    ocr_not_contains: ["崩溃", "闪退", "已停止"]
+    capture: xmly
+    warn_only: true
+
+  # 8a. 点"刷新重试"如果出现
+  - name: tap_xmly_retry
+    action: tap_ocr
+    text: "刷新"
+    fuzzy: true
+    optional: true
+    wait: 1.5
+    capture: xmly_retry
+
+  - name: exit_xmly
+    action: press_key
+    key: asr
+    wait: 1.0
+
+  # =========================================================
+  # 9. 跟读 — 语音交互 APP
+  # =========================================================
+  - name: launch_repeat
+    action: shell
+    command: miniapp_cli start 8080212693101341
+    wait: 3.0
+    capture: repeat
+
+  - name: assert_repeat_visible
+    action: assert
+    screen_ok: repeat
+    warn_only: false
+
+  - name: assert_repeat_changed
+    action: assert
+    not_frozen_from: xmly_retry
+    current: repeat
+    min_change_ratio: 0.01
+    warn_only: false
+
+  - name: assert_repeat_no_error
+    action: assert
+    ocr_check_errors: true
+    capture: repeat
+    warn_only: true
+
+  - name: exit_repeat
+    action: press_key
+    key: asr
+    wait: 1.0
+
+  # =========================================================
+  # 10. 小P老师 — AI 助手
+  # =========================================================
+  - name: launch_little_p
+    action: shell
+    command: miniapp_cli start 8001707294117702
+    wait: 3.0
+    capture: little_p
+
+  - name: assert_little_p_launched
+    action: assert
+    screen_ok: little_p
+    warn_only: false
+
+  - name: assert_little_p_no_error
+    action: assert
+    ocr_check_errors: true
+    capture: little_p
+    warn_only: true
+
+  - name: exit_little_p
+    action: press_key
+    key: asr
+    wait: 1.0
+
+  # =========================================================
+  # 11. 最终检查：首页恢复 + 系统健康
+  # =========================================================
+  - name: final_return_home
+    action: press_key
+    key: asr
+    wait: 1.5
+    capture: final_home
+
+  - name: assert_final_home_visible
+    action: assert
+    screen_ok: final_home
+    warn_only: false
+
+  - name: assert_final_home_content
+    action: assert
+    ocr_contains: "查词翻译"
+    capture: final_home
+    fuzzy: true
+    warn_only: false
+
+  - name: assert_final_no_error
+    action: assert
+    ocr_check_errors: true
+    capture: final_home
+    warn_only: true
+
+  # 11a. 关键进程存活
+  - name: assert_proc_alive
+    action: assert
+    proc_alive:
+      - miniapp
+      - adbd
+    warn_only: false
+
+  # 11b. 内存检查（全程下降不超过 50MB）
+  - name: assert_memory_ok
+    action: assert
+    mem_delta_ok: -50
+    warn_only: true
+
+  # 11c. 进程快照验证无崩溃
+  - name: final_proc_check
+    action: proc_snapshot
+    label: final_proc
