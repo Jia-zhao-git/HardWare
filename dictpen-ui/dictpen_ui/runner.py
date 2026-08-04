@@ -18,6 +18,7 @@ from .monitor import DeviceMonitor
 from .screenshot import ScreenshotDriver, files_differ, png_size, sha256_file
 from .simple_yaml import dump_json, load_simple_yaml
 from . import imgcheck
+from . import ocrcheck
 
 # memory sample interval in seconds (0 = only at step boundaries)
 MEM_SAMPLE_INTERVAL = 0  # sample on every step that has capture=
@@ -81,6 +82,7 @@ class TestRunner:
         self.monitor = DeviceMonitor(self.adb)
         self.ui_map = self._load_ui_map()
         self._steps_dir: Path | None = None
+        self._ocr_results: dict[str, list] = {}  # label -> list[OcrWord]
 
     def _read_cfg_json(self) -> dict | None:
         """Read cfg.json from the device as a Python dict."""
@@ -118,6 +120,7 @@ class TestRunner:
         logs_dir.mkdir(parents=True, exist_ok=True)
         # expose for assertions that need to capture a live frame
         self._steps_dir = steps_dir
+        self._ocr_results = {}
 
         result = RunResult(run_id=run_id, test_name=spec.get("name", test_path.stem), device=self.info.to_dict(), run_dir=str(run_dir))
         dump_json(self.info.to_dict(), run_dir / "device-info.json")
@@ -436,6 +439,46 @@ class TestRunner:
                 label = step.get("save_as", f"{index:03d}_shell.txt")
                 out_path = steps_dir / label
                 out_path.write_text(out, encoding="utf-8", errors="ignore")
+            elif action == "ocr":
+                # Take a screenshot (or use existing capture) then run OCR
+                cap_label = step.get("capture", step.get("label", name))
+                if cap_label in captures:
+                    shot = captures[cap_label]
+                else:
+                    shot = self._capture(index, cap_label, steps_dir)
+                    captures[cap_label] = shot
+                    res.screenshot = str(shot)
+                if not ocrcheck.available():
+                    raise ValueError("[warn] easyocr not installed; run: pip install easyocr")
+                words = ocrcheck.ocr_read(shot, min_confidence=float(step.get("min_confidence", 0.3)))
+                self._ocr_results[cap_label] = words
+                all_text = " ".join(w.text for w in words)
+                res.command = f"ocr({cap_label}) -> {len(words)} words: {all_text[:120]}"
+            elif action == "tap_ocr":
+                # Find text via OCR and tap its center
+                text_query = step["text"]
+                cap_label = step.get("capture", step.get("label", f"{index:03d}_tap_ocr"))
+                if cap_label in captures:
+                    shot = captures[cap_label]
+                else:
+                    shot = self._capture(index, cap_label, steps_dir)
+                    captures[cap_label] = shot
+                    res.screenshot = str(shot)
+                if not ocrcheck.available():
+                    raise ValueError("easyocr not installed; run: pip install easyocr")
+                fuzzy = bool(step.get("fuzzy", True))
+                w = ocrcheck.find_text(shot, text_query, fuzzy=fuzzy,
+                                       min_confidence=float(step.get("min_confidence", 0.3)))
+                if w is None:
+                    msg = f"Text not found on screen: '{text_query}'"
+                    if step.get("optional"):
+                        res.command = f"tap_ocr: SKIP ({msg})"
+                    else:
+                        raise ValueError(msg)
+                else:
+                    res.command = f"tap_ocr '{text_query}' -> ({w.center_x},{w.center_y}) conf={w.confidence}"
+                    self.input.tap(w.center_x, w.center_y, int(step.get("duration_ms", 120)))
+                    self._ocr_results[cap_label] = [w]
             else:
                 raise ValueError(f"Unsupported action: {action}")
 
@@ -476,6 +519,16 @@ class TestRunner:
                         res.status = "warned"
                         res.message = (res.message + "; " if res.message else "") + \
                             f"auto-visual: {vr['message']}"
+                except Exception:
+                    pass
+            # --- automatic OCR error-word scan (if easyocr available) ---
+            if res.screenshot and ocrcheck.available():
+                try:
+                    found_errors = ocrcheck.check_error_words(Path(res.screenshot))
+                    if found_errors and res.status == "passed":
+                        res.status = "warned"
+                        res.message = (res.message + "; " if res.message else "") + \
+                            f"auto-ocr: error words detected: {found_errors}"
                 except Exception:
                     pass
         return res
@@ -617,6 +670,69 @@ class TestRunner:
         if "file_exists" in step:
             if not Path(step["file_exists"]).exists():
                 raise AssertionError(f"File does not exist: {step['file_exists']}")
+
+        # --- OCR: screen must contain text ---
+        if "ocr_contains" in step:
+            queries = step["ocr_contains"]
+            if isinstance(queries, str):
+                queries = [queries]
+            cap_key = step.get("capture", step.get("ocr_capture"))
+            if cap_key and cap_key in captures:
+                shot = captures[cap_key]
+            else:
+                shot = self._capture(step.get("index", 995), "assert_ocr_contains", self._steps_dir)
+                captures["_ocr_contains_"] = shot
+            if not ocrcheck.available():
+                raise AssertionError("[warn] easyocr not installed")
+            try:
+                found = ocrcheck.find_all_text(shot, queries,
+                                               fuzzy=bool(step.get("fuzzy", True)),
+                                               min_confidence=float(step.get("min_confidence", 0.3)))
+                missing = [q for q in queries if q not in found]
+                if missing:
+                    _fail(f"OCR: expected text not found: {missing}  (screenshot: {shot.name})")
+            except RuntimeError as exc:
+                raise AssertionError("[warn] " + str(exc))
+
+        # --- OCR: screen must NOT contain any of the given error words ---
+        if "ocr_not_contains" in step:
+            error_words = step["ocr_not_contains"]
+            if isinstance(error_words, str):
+                error_words = [error_words]
+            # use_default: if true, also check against DEFAULT_ERROR_WORDS
+            if step.get("use_default_errors", False):
+                error_words = list(error_words) + ocrcheck.DEFAULT_ERROR_WORDS
+            cap_key = step.get("capture", step.get("ocr_capture"))
+            if cap_key and cap_key in captures:
+                shot = captures[cap_key]
+            else:
+                shot = self._capture(step.get("index", 994), "assert_ocr_not_contains", self._steps_dir)
+                captures["_ocr_not_contains_"] = shot
+            if not ocrcheck.available():
+                raise AssertionError("[warn] easyocr not installed")
+            try:
+                found_errors = ocrcheck.check_error_words(shot, error_words,
+                                                          min_confidence=float(step.get("min_confidence", 0.3)))
+                if found_errors:
+                    _fail(f"OCR: error text found on screen: {found_errors}")
+            except RuntimeError as exc:
+                raise AssertionError("[warn] " + str(exc))
+
+        # --- OCR: use default error word list (shorthand for common monitoring) ---
+        if step.get("ocr_check_errors"):
+            cap_key = step.get("capture", step.get("ocr_capture"))
+            if cap_key and cap_key in captures:
+                shot = captures[cap_key]
+            else:
+                shot = self._capture(step.get("index", 993), "assert_ocr_errors", self._steps_dir)
+                captures["_ocr_errors_"] = shot
+            if ocrcheck.available():
+                try:
+                    found_errors = ocrcheck.check_error_words(shot)
+                    if found_errors:
+                        _fail(f"OCR: error keywords detected: {found_errors}")
+                except RuntimeError as exc:
+                    raise AssertionError("[warn] " + str(exc))
 
     # ------------------------------------------------------------------
     # Report

@@ -1,0 +1,78 @@
+# OCR-based assertion demo — requires: pip install easyocr
+#
+# Demonstrates:
+#   1. ocr_contains       — assert specific text must appear on screen
+#   2. ocr_not_contains   — assert error text must NOT appear
+#   3. ocr_check_errors   — auto-scan against default Chinese error word list
+#   4. tap_ocr            — find a text button by OCR and tap it dynamically
+#
+# Replace app IDs below with your real device's app IDs.
+# Run: python dictpen-ui.py run --test tests/ocr-assert-demo.yaml --serial <SN>
+
+name: ocr_assert_demo
+on_failure:
+  stop: false
+
+steps:
+  - name: return_home
+    action: press_key
+    key: asr
+    wait: 1.0
+    capture: home
+
+  # --- 1. OCR: scan home screen for known UI text ---
+  - name: ocr_home_screen
+    action: ocr
+    capture: home
+    # result is stored internally; no assertion yet, just read
+
+  # --- 2. Assert home screen has no error messages ---
+  - name: assert_no_home_errors
+    action: assert
+    ocr_check_errors: true
+    capture: home
+    warn_only: true           # WARN but continue
+
+  - name: launch_wordbook
+    action: shell
+    command: miniapp_cli start 8080212246010681
+    wait: 2.5
+    capture: wordbook
+
+  # --- 3. Assert wordbook launched with expected title text ---
+  - name: assert_wordbook_title
+    action: assert
+    ocr_contains: "生词本"      # must find this text
+    capture: wordbook
+    fuzzy: true
+    warn_only: false
+
+  # --- 4. Assert no error popups in wordbook ---
+  - name: assert_wordbook_no_errors
+    action: assert
+    ocr_not_contains: ["错误", "失败", "加载失败", "网络错误"]
+    capture: wordbook
+    warn_only: true
+
+  - name: exit_wordbook
+    action: press_key
+    key: asr
+    wait: 1.0
+    capture: after_exit
+
+  # --- 5. Auto error scan after exiting ---
+  - name: assert_exit_clean
+    action: assert
+    ocr_check_errors: true
+    capture: after_exit
+    warn_only: true
+
+  # --- 6. tap_ocr example: find and tap a text button dynamically ---
+  # Uncomment and set the text to match a real button on your device
+  # - name: tap_settings_by_text
+  #   action: tap_ocr
+  #   text: "设置"
+  #   fuzzy: true
+  #   optional: true            # skip if text not found instead of failing
+  #   wait: 1.5
+  #   capture: after_tap_settings
