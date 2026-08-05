@@ -13,8 +13,8 @@ interface Props {
   onBack: () => void
 }
 
-// 每次读取的片段大小（字符数）
-const CHUNK_CHARS = 8000
+const CHUNK_CHARS = 8000  // 每段加载的字符数
+const AUTO_LOAD_STEP = 3   // 自动加载时前进的百分比步长
 
 export default function NovelReaderPage({ onBack }: Props) {
   const [novelMeta, setNovelMeta] = useState<NovelMeta | null>(null)
@@ -22,11 +22,14 @@ export default function NovelReaderPage({ onBack }: Props) {
   const [showNovel, setShowNovel] = useState(true)
   const [loading, setLoading] = useState(false)
   const [notification, setNotification] = useState('')
-  // 当前阅读位置：百分比 0-100
   const [percent, setPercent] = useState(0)
-  const [currentPage, setCurrentPage] = useState(0)
-  const [totalPages, setTotalPages] = useState(0)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const loadedRef = useRef(false)
+  // 防止到底部重复触发加载
+  const autoLoadingRef = useRef(false)
+  // 记录当前显示的内容在文件中的字节范围
+  const [currentByteStart, setCurrentByteStart] = useState(0)
+  const [currentByteEnd, setCurrentByteEnd] = useState(0)
 
   // 恢复小说元信息
   useEffect(() => {
@@ -48,12 +51,12 @@ export default function NovelReaderPage({ onBack }: Props) {
     const clamped = Math.max(0, Math.min(100, pct))
     try {
       const startByte = Math.floor((clamped / 100) * meta.fileSize)
-      // 读取固定长度片段
       const readLen = Math.min(CHUNK_CHARS, meta.fileSize - startByte)
-      const content = await readFileRange(meta.filePath, startByte, startByte + readLen)
+      const endByte = startByte + readLen
+      const content = await readFileRange(meta.filePath, startByte, endByte)
       setPercent(clamped)
-      setCurrentPage(Math.floor(clamped / 5))
-      setTotalPages(Math.ceil(meta.fileSize / CHUNK_CHARS))
+      setCurrentByteStart(startByte)
+      setCurrentByteEnd(endByte)
       setCodeLines(generateMixedCode(content))
     } catch (e) {
       setNotification('读取失败: ' + String(e))
@@ -61,17 +64,47 @@ export default function NovelReaderPage({ onBack }: Props) {
     setLoading(false)
   }, [])
 
-  // 前进/后退一跳
+  // 追加内容（自动加载时用，不替换已有内容）
+  const appendContent = useCallback(async (meta: NovelMeta, pct: number) => {
+    if (autoLoadingRef.current) return
+    autoLoadingRef.current = true
+    try {
+      const startByte = Math.floor((pct / 100) * meta.fileSize)
+      if (startByte >= meta.fileSize) return // 已到末尾
+      const readLen = Math.min(CHUNK_CHARS, meta.fileSize - startByte)
+      const endByte = startByte + readLen
+      const content = await readFileRange(meta.filePath, startByte, endByte)
+      setPercent(pct)
+      setCurrentByteStart(startByte)
+      setCurrentByteEnd(endByte)
+      setCodeLines(prev => [...prev, ...generateMixedCode(content)])
+    } catch (e) {
+      setNotification('加载失败: ' + String(e))
+    }
+    autoLoadingRef.current = false
+  }, [])
+
+  // 滚动到底部自动加载
+  const handleScroll = useCallback(() => {
+    if (!novelMeta || loading || percent >= 100) return
+    const el = scrollRef.current
+    if (!el) return
+    // 距底部小于 50px 时触发
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
+    if (nearBottom) {
+      const newPct = Math.min(100, percent + AUTO_LOAD_STEP)
+      appendContent(novelMeta, newPct)
+    }
+  }, [novelMeta, loading, percent, appendContent])
+
+  // 前进/后退
   const jump = (delta: number) => {
     if (!novelMeta) return
-    const newPct = percent + delta
-    loadPosition(novelMeta, newPct)
+    loadPosition(novelMeta, percent + delta)
   }
 
-  // 滑块拖拽
   const handleSlider = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = Number(e.target.value)
-    setPercent(v)
+    setPercent(Number(e.target.value))
   }
   const handleSliderCommit = () => {
     if (novelMeta) loadPosition(novelMeta, percent)
@@ -79,7 +112,6 @@ export default function NovelReaderPage({ onBack }: Props) {
 
   const handleDoubleClick = () => setShowNovel(!showNovel)
 
-  // 导入小说
   const handleImport = async () => {
     try {
       const filePath = await openDialog({
@@ -112,8 +144,8 @@ export default function NovelReaderPage({ onBack }: Props) {
       localStorage.setItem('adb_novel_meta', JSON.stringify(meta))
       setNovelMeta(meta)
       setPercent(0)
-      setCurrentPage(0)
-      setTotalPages(Math.ceil(result.fileSize / CHUNK_CHARS))
+      setCurrentByteStart(0)
+      setCurrentByteEnd(Math.min(CHUNK_CHARS, result.fileSize))
 
       if (result.preview) {
         setCodeLines(generateMixedCode(result.preview))
@@ -185,15 +217,13 @@ export default function NovelReaderPage({ onBack }: Props) {
         </div>
       )}
 
-      {loading && (
-        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', color: '#0f0', fontSize: 14 }}>
-          加载中...
-        </div>
-      )}
-
       {/* 阅读区 */}
       {codeLines.length > 0 ? (
-        <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px', fontFamily: "'Cascadia Code','Consolas','Fira Code',monospace", fontSize: 12, lineHeight: '1.7' }}>
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          style={{ flex: 1, overflow: 'auto', padding: '16px 20px', fontFamily: "'Cascadia Code','Consolas','Fira Code',monospace", fontSize: 12, lineHeight: '1.7' }}
+        >
           <div style={{ display: 'flex' }}>
             <div style={{ paddingRight: 16, textAlign: 'right', color: '#333', userSelect: 'none', flexShrink: 0, minWidth: 40, borderRight: '1px solid #1a1a1a' }}>
               {codeLines.map((_, i) => <div key={i}>{i + 1}</div>)}
@@ -213,6 +243,17 @@ export default function NovelReaderPage({ onBack }: Props) {
               })}
             </div>
           </div>
+          {/* 底部加载指示器 */}
+          {loading && percent < 100 && (
+            <div style={{ textAlign: 'center', padding: 12, color: '#555', fontSize: 11 }}>
+              加载中...
+            </div>
+          )}
+          {percent >= 100 && (
+            <div style={{ textAlign: 'center', padding: 12, color: '#333', fontSize: 11 }}>
+              — 已到末尾 —
+            </div>
+          )}
         </div>
       ) : (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#444', gap: 16 }}>
@@ -267,7 +308,7 @@ export default function NovelReaderPage({ onBack }: Props) {
             <span style={{ color: showNovel ? '#0a0' : '#600' }}>{showNovel ? '小说可见' : '小说已隐藏'}</span>
           </>
         )}
-        <span style={{ marginLeft: 'auto' }}>双击切换小说可见性 | 代码:小说 = 80:20</span>
+        <span style={{ marginLeft: 'auto' }}>双击切换小说可见性 | 滚动到底自动加载</span>
       </div>
     </div>
   )
