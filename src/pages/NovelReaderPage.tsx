@@ -1,18 +1,11 @@
-
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { invoke, open as openDialog, readFileRange } from '../api/electron-bridge'
-import { ArrowLeft, BookOpen, Eye, EyeOff, Upload, Trash2, Code2 } from 'lucide-react'
-
-interface ChapterMeta {
-  title: string
-  byteStart: number
-  byteEnd: number
-}
+import { ArrowLeft, BookOpen, Eye, EyeOff, Upload, Trash2, Code2, ChevronLeft, ChevronRight } from 'lucide-react'
 
 interface NovelMeta {
   filePath: string
   title: string
-  chapters: ChapterMeta[]
+  fileSize: number
   importedAt: number
 }
 
@@ -20,90 +13,116 @@ interface Props {
   onBack: () => void
 }
 
+// 每次读取的片段大小（字符数）
+const CHUNK_CHARS = 8000
+
 export default function NovelReaderPage({ onBack }: Props) {
   const [novelMeta, setNovelMeta] = useState<NovelMeta | null>(null)
-  const [activeChapter, setActiveChapter] = useState(0)
   const [codeLines, setCodeLines] = useState<string[]>([])
   const [showNovel, setShowNovel] = useState(true)
   const [loading, setLoading] = useState(false)
   const [notification, setNotification] = useState('')
-  const [chapterContent, setChapterContent] = useState('')
+  // 当前阅读位置：百分比 0-100
+  const [percent, setPercent] = useState(0)
+  const [currentPage, setCurrentPage] = useState(0)
+  const [totalPages, setTotalPages] = useState(0)
+  const loadedRef = useRef(false)
 
+  // 恢复小说元信息
   useEffect(() => {
+    if (loadedRef.current) return
+    loadedRef.current = true
     try {
       const saved = localStorage.getItem('adb_novel_meta')
       if (saved) {
         const meta: NovelMeta = JSON.parse(saved)
         setNovelMeta(meta)
-        loadChapterContent(meta, 0)
+        loadPosition(meta, 0)
       }
     } catch { /* ignore */ }
   }, [])
 
-  const loadChapterContent = useCallback(async (meta: NovelMeta, idx: number) => {
-    if (idx < 0 || idx >= meta.chapters.length) return
+  // 按百分比加载片段
+  const loadPosition = useCallback(async (meta: NovelMeta, pct: number) => {
     setLoading(true)
+    const clamped = Math.max(0, Math.min(100, pct))
     try {
-      const ch = meta.chapters[idx]
-      const content = await readFileRange(meta.filePath, ch.byteStart, ch.byteEnd)
-      setChapterContent(content)
-      setActiveChapter(idx)
-      setCodeLines(generateMixedCode(meta.chapters[idx].title, content))
+      const startByte = Math.floor((clamped / 100) * meta.fileSize)
+      // 读取固定长度片段
+      const readLen = Math.min(CHUNK_CHARS, meta.fileSize - startByte)
+      const content = await readFileRange(meta.filePath, startByte, startByte + readLen)
+      setPercent(clamped)
+      setCurrentPage(Math.floor(clamped / 5))
+      setTotalPages(Math.ceil(meta.fileSize / CHUNK_CHARS))
+      setCodeLines(generateMixedCode(content))
     } catch (e) {
-      setNotification('??????: ' + String(e))
+      setNotification('读取失败: ' + String(e))
     }
     setLoading(false)
   }, [])
 
-  const switchChapter = (idx: number) => {
-    if (novelMeta) loadChapterContent(novelMeta, idx)
+  // 前进/后退一跳
+  const jump = (delta: number) => {
+    if (!novelMeta) return
+    const newPct = percent + delta
+    loadPosition(novelMeta, newPct)
+  }
+
+  // 滑块拖拽
+  const handleSlider = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = Number(e.target.value)
+    setPercent(v)
+  }
+  const handleSliderCommit = () => {
+    if (novelMeta) loadPosition(novelMeta, percent)
   }
 
   const handleDoubleClick = () => setShowNovel(!showNovel)
 
+  // 导入小说
   const handleImport = async () => {
     try {
       const filePath = await openDialog({
         multiple: false,
-        filters: [{ name: '????', extensions: ['txt', 'md', 'text'] }],
+        filters: [{ name: '文本文件', extensions: ['txt', 'md', 'text'] }],
       })
       if (!filePath) return
 
       setLoading(true)
-
       const result = await invoke<{
         success: boolean
         preview?: string
-        chapters?: ChapterMeta[]
+        fileSize?: number
         error?: string
       }>('scan_novel_file', { path: filePath })
 
-      if (!result?.success || !result.chapters) {
-        setNotification('??????: ' + (result?.error || '????'))
+      if (!result?.success || result.fileSize == null) {
+        setNotification('读取文件失败: ' + (result?.error || '未知错误'))
         setLoading(false)
         return
       }
 
-      const title = filePath.split(/[\\/]/).pop()?.replace(/\.(txt|md|text)$/, '') || '???'
+      const title = filePath.split(/[\\/]/).pop()?.replace(/\.(txt|md|text)$/, '') || '未命名'
       const meta: NovelMeta = {
         filePath,
         title,
-        chapters: result.chapters,
+        fileSize: result.fileSize,
         importedAt: Date.now(),
       }
-
       localStorage.setItem('adb_novel_meta', JSON.stringify(meta))
       setNovelMeta(meta)
+      setPercent(0)
+      setCurrentPage(0)
+      setTotalPages(Math.ceil(result.fileSize / CHUNK_CHARS))
 
-      const firstContent = result.preview || ''
-      setChapterContent(firstContent)
-      setActiveChapter(0)
-      setCodeLines(generateMixedCode(meta.chapters[0].title, firstContent))
+      if (result.preview) {
+        setCodeLines(generateMixedCode(result.preview))
+      }
       setShowNovel(true)
-      setNotification('????' + title + '??? ' + meta.chapters.length + ' ?')
+      setNotification('已导入「' + title + '」')
       setTimeout(() => setNotification(''), 3000)
     } catch (e) {
-      setNotification('????: ' + String(e))
+      setNotification('导入失败: ' + String(e))
       setTimeout(() => setNotification(''), 3000)
     }
     setLoading(false)
@@ -113,8 +132,7 @@ export default function NovelReaderPage({ onBack }: Props) {
     localStorage.removeItem('adb_novel_meta')
     setNovelMeta(null)
     setCodeLines([])
-    setChapterContent('')
-    setActiveChapter(0)
+    setPercent(0)
   }
 
   return (
@@ -130,6 +148,7 @@ export default function NovelReaderPage({ onBack }: Props) {
       }}
       onDoubleClick={handleDoubleClick}
     >
+      {/* 顶栏 */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 12,
         padding: '8px 16px', background: '#111', borderBottom: '1px solid #1a1a2e',
@@ -137,7 +156,7 @@ export default function NovelReaderPage({ onBack }: Props) {
       }}>
         <button onClick={onBack}
           style={{ background: 'none', border: '1px solid #333', borderRadius: 4, color: '#888', cursor: 'pointer', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
-          <ArrowLeft size={13} /> ??
+          <ArrowLeft size={13} /> 退出
         </button>
         <span style={{ color: '#0f0', fontWeight: 600, fontSize: 13 }}>
           <Code2 size={13} style={{ marginRight: 4, verticalAlign: -2 }} />
@@ -146,24 +165,16 @@ export default function NovelReaderPage({ onBack }: Props) {
         <div style={{ flex: 1 }} />
         <span style={{ color: showNovel ? '#0f0' : '#600', fontSize: 10, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }} onClick={() => setShowNovel(!showNovel)}>
           {showNovel ? <Eye size={13} /> : <EyeOff size={13} />}
-          {showNovel ? '????' : '????'}
+          {showNovel ? '小说可见' : '小说隐藏'}
         </span>
-        {novelMeta && (
-          <select value={activeChapter} onChange={e => switchChapter(Number(e.target.value))}
-            style={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: 4, color: '#0f0', padding: '4px 8px', fontSize: 11, outline: 'none', maxWidth: 200, cursor: 'pointer', fontFamily: 'inherit' }}>
-            {novelMeta.chapters.map((ch, i) => (
-              <option key={i} value={i} style={{ background: '#111', color: '#e0e0e0' }}>{ch.title}</option>
-            ))}
-          </select>
-        )}
         <button onClick={handleImport}
           style={{ background: 'none', border: '1px solid #333', borderRadius: 4, color: '#0af', cursor: 'pointer', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
-          <Upload size={13} /> ??
+          <Upload size={13} /> 导入
         </button>
         {novelMeta && (
           <button onClick={clearNovel}
             style={{ background: 'none', border: '1px solid #333', borderRadius: 4, color: '#f55', cursor: 'pointer', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
-            <Trash2 size={13} /> ??
+            <Trash2 size={13} /> 清除
           </button>
         )}
       </div>
@@ -176,10 +187,11 @@ export default function NovelReaderPage({ onBack }: Props) {
 
       {loading && (
         <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', color: '#0f0', fontSize: 14 }}>
-          ???...
+          加载中...
         </div>
       )}
 
+      {/* 阅读区 */}
       {codeLines.length > 0 ? (
         <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px', fontFamily: "'Cascadia Code','Consolas','Fira Code',monospace", fontSize: 12, lineHeight: '1.7' }}>
           <div style={{ display: 'flex' }}>
@@ -189,13 +201,13 @@ export default function NovelReaderPage({ onBack }: Props) {
             <div style={{ flex: 1, paddingLeft: 16 }}>
               {codeLines.map((line, i) => {
                 const isNovelComment = showNovel && line.trimStart().startsWith('//')
-                const isChapterHeader = line.includes('???')
+                const isChapterHeader = line.includes('═══')
                 return (
                   <div key={i} style={{
                     whiteSpace: 'pre',
                     color: isChapterHeader ? '#ff0' : isNovelComment ? '#0a0' : line.startsWith('//') ? '#444' :
-                      /^(function|class|const|let|var|interface|export|import|async|return|if|for|while|try|catch|throw|new)/.test(line) ? '#c678dd' :
-                      /(function|class|const|let|var|interface|export|import|async|return|if|else|for|while|throw|new|this|typeof|instanceof)/.test(line) ? '#e5c07b' : '#abb2bf',
+                      /^(function|class|const|let|var|interface|export|import|async|return|if|for|while|try|catch|throw|new)\b/.test(line) ? '#c678dd' :
+                      /\b(function|class|const|let|var|interface|export|import|async|return|if|else|for|while|throw|new|this|typeof|instanceof)\b/.test(line) ? '#e5c07b' : '#abb2bf',
                   }}>{line}</div>
                 )
               })}
@@ -205,32 +217,63 @@ export default function NovelReaderPage({ onBack }: Props) {
       ) : (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#444', gap: 16 }}>
           <BookOpen size={48} style={{ opacity: 0.3 }} />
-          <div style={{ fontSize: 14 }}>????</div>
-          <div style={{ fontSize: 11, color: '#333' }}>????????????????????</div>
+          <div style={{ fontSize: 14 }}>暂无内容</div>
+          <div style={{ fontSize: 11, color: '#333' }}>点击「导入」加载小说，伪装成代码注释</div>
           <button onClick={handleImport}
             style={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: 6, color: '#0af', cursor: 'pointer', padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-            <Upload size={14} /> ???? (TXT/MD)
+            <Upload size={14} /> 导入小说 (TXT/MD)
           </button>
         </div>
       )}
 
+      {/* 底部导航：百分比滑块 */}
+      {novelMeta && (
+        <div style={{ padding: '6px 16px 8px', background: '#111', borderTop: '1px solid #1a1a2e', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button onClick={() => jump(-5)}
+            style={{ background: 'none', border: '1px solid #333', borderRadius: 3, color: '#888', cursor: 'pointer', padding: '2px 6px', fontSize: 0, display: 'flex', alignItems: 'center' }}>
+            <ChevronLeft size={12} />
+          </button>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={percent}
+            onChange={handleSlider}
+            onMouseUp={handleSliderCommit}
+            onTouchEnd={handleSliderCommit}
+            style={{
+              flex: 1, height: 4, WebkitAppearance: 'none', appearance: 'none',
+              background: `linear-gradient(to right, #0f0 0%, #0f0 ${percent}%, #1a1a2e ${percent}%, #1a1a2e 100%)`,
+              borderRadius: 2, outline: 'none', cursor: 'pointer',
+            }}
+          />
+          <button onClick={() => jump(5)}
+            style={{ background: 'none', border: '1px solid #333', borderRadius: 3, color: '#888', cursor: 'pointer', padding: '2px 6px', fontSize: 0, display: 'flex', alignItems: 'center' }}>
+            <ChevronRight size={12} />
+          </button>
+          <span style={{ color: '#555', fontSize: 10, minWidth: 40, textAlign: 'center' }}>
+            {percent}%
+          </span>
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 16, padding: '4px 16px', background: '#111', borderTop: '1px solid #1a1a2e', fontSize: 10, color: '#444', userSelect: 'none' }}>
-        <span>{codeLines.length} ?</span>
+        <span>{codeLines.length} 行</span>
         {novelMeta && (
           <>
             <span>|</span>
-            <span>? {activeChapter + 1}/{novelMeta.chapters.length} ?</span>
+            <span>进度 {percent}%</span>
             <span>|</span>
-            <span style={{ color: showNovel ? '#0a0' : '#600' }}>{showNovel ? '??????' : '?????'}</span>
+            <span style={{ color: showNovel ? '#0a0' : '#600' }}>{showNovel ? '小说可见' : '小说已隐藏'}</span>
           </>
         )}
-        <span style={{ marginLeft: 'auto' }}>????????? | ??:?? = 80:20</span>
+        <span style={{ marginLeft: 'auto' }}>双击切换小说可见性 | 代码:小说 = 80:20</span>
       </div>
     </div>
   )
 }
 
-// ====== generateMixedCode ======
+// ====== 混合代码生成 ======
 const CODE_SNIPPETS = [
   'function initializeRuntime() {',
   '  const config = loadConfig("/etc/app/config.json");',
@@ -308,16 +351,16 @@ const CODE_SNIPPETS = [
   '}',
 ]
 
-function generateMixedCode(chapterTitle: string, novelContent: string): string[] {
+function generateMixedCode(novelContent: string): string[] {
   const novelLines = novelContent.split('\n').filter(l => l.trim())
   const totalNovelLines = novelLines.length
   const targetCodeLines = totalNovelLines * 4
   const result: string[] = []
 
   result.push('/**')
-  result.push(' * ???????????????????????????????????????')
-  result.push(' * ' + chapterTitle)
-  result.push(' * ???????????????????????????????????????')
+  result.push(' * ═══════════════════════════════════════')
+  result.push(' * 小说阅读器')
+  result.push(' * ═══════════════════════════════════════')
   result.push(' */')
   result.push('')
 

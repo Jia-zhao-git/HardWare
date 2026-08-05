@@ -4,6 +4,33 @@ const { dialog, BrowserWindow } = require('electron');
 const fs = require('fs');
 const { getState } = require('./context');
 
+// GBK/UTF-8 自动检测解码
+function decodeBuffer(raw) {
+    // UTF-8 BOM: EF BB BF
+    if (raw.length >= 3 && raw[0] === 0xEF && raw[1] === 0xBB && raw[2] === 0xBF) {
+        return raw.toString('utf-8', 3);
+    }
+    // 先试 UTF-8
+    const utf8 = raw.toString('utf-8');
+    // 统计替换字符 � (U+FFFD) 比例，超过阈值按 GBK 解码
+    let bad = 0;
+    for (let i = 0; i < utf8.length; i++) {
+        if (utf8.charCodeAt(i) === 0xFFFD ||
+            (utf8.charCodeAt(i) >= 0xDC00 && utf8.charCodeAt(i) <= 0xDFFF)) {
+            bad++;
+        }
+    }
+    if (bad > Math.max(utf8.length * 0.01, 3)) {
+        // GBK
+        try {
+            return new TextDecoder('gbk').decode(raw);
+        } catch (e) {
+            return utf8;
+        }
+    }
+    return utf8;
+}
+
 async function dialogOpen(event, options) {
     const mainWindow = getState().mainWindow;
     const result = await dialog.showOpenDialog(mainWindow, options);
@@ -36,7 +63,7 @@ async function readFile(event, { path: filePath }) {
     }
 }
 
-// 按字节范围读取文件片段，避免 20MB+ 大文件全部加载到内存
+// 按字节偏移读文件片段，GBK/UTF-8 自动检测
 async function readFileRange(event, { path: filePath, start, end }) {
     try {
         const length = end - start;
@@ -44,55 +71,27 @@ async function readFileRange(event, { path: filePath, start, end }) {
         const fd = fs.openSync(filePath, 'r');
         fs.readSync(fd, buffer, 0, length, start);
         fs.closeSync(fd);
-        return { success: true, content: buffer.toString('utf-8') };
+        return { success: true, content: decodeBuffer(buffer) };
     } catch (e) {
         return { success: false, error: e.message };
     }
 }
 
-// 扫描小说文件章节偏移。只返回 metadata（路径+偏移），不存正文。
-// localStorage 上限 ~5MB，20MB 的 txt 正文存不进去，需改为按偏移按需读取。
+// 扫描小说文件：返回文件大小 + 开头预览（供百分比跳转用）
 async function scanNovelFile(event, { path: filePath }) {
     try {
         const stat = fs.statSync(filePath);
         const fileSize = stat.size;
-        // 整文件读入内存（Node.js 几百 MB 也没问题，这里不过 IPC，直接内存操作）
-        const raw = fs.readFileSync(filePath);
-        const content = raw.toString('utf-8');
 
-        // 正则找章节标题
-        const CHAPTER_RE = /(?:^|\n)\s*(?:第[零一二三四五六七八九十百千万\d]+[章节回卷]|Chapter\s+\d+|#[^\n]+|(?:序言|前言|后记|尾声|楔子|番外|引子|终章)[^\n]*)\s*(?:\n|$)/g;
-        /** @type {{title:string, pos:number}[]} */
-        const headers = [];
-        let m;
-        while ((m = CHAPTER_RE.exec(content)) !== null) {
-            headers.push({ title: m[0].trim(), pos: m.index });
-        }
+        // 读前 200KB 做预览
+        const previewLen = Math.min(200 * 1024, fileSize);
+        const raw = Buffer.alloc(previewLen);
+        const fd = fs.openSync(filePath, 'r');
+        fs.readSync(fd, raw, 0, previewLen, 0);
+        fs.closeSync(fd);
 
-        let chapters;
-        if (headers.length === 0) {
-            chapters = [{ title: '全文', byteStart: 0, byteEnd: content.length }];
-        } else {
-            chapters = [];
-            for (let i = 0; i < headers.length; i++) {
-                const h = headers[i];
-                const nextPos = i + 1 < headers.length ? headers[i + 1].pos : content.length;
-                // 正文从标题行结束（跳过标题+换行）开始
-                const titleEnd = content.indexOf('\n', h.pos + h.title.length);
-                const bodyStart = titleEnd >= 0 ? titleEnd + 1 : h.pos + h.title.length;
-                chapters.push({
-                    title: h.title,
-                    byteStart: bodyStart,
-                    byteEnd: nextPos,
-                });
-            }
-        }
-
-        // 返回元数据 + 第一章预览（限制 500KB 避免 IPC 传回 20MB）
-        const previewLen = Math.min(chapters[0].byteEnd - chapters[0].byteStart, 500 * 1024);
-        const preview = content.substring(chapters[0].byteStart, chapters[0].byteStart + previewLen);
-
-        return { success: true, chapters, preview, fileSize };
+        const preview = decodeBuffer(raw);
+        return { success: true, fileSize, preview };
     } catch (e) {
         return { success: false, error: e.message };
     }
