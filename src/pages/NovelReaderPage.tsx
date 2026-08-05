@@ -57,11 +57,9 @@ export default function NovelReaderPage({ onBack }: Props) {
         const meta: NovelMeta = JSON.parse(saved)
         setNovelMeta(meta)
         fileSizeRef.current = meta.fileSize
-        // 恢复上次阅读字节位置
+        // 恢复上次阅读字节位置（直接按字节加载，不走百分比防精度丢失）
         const lastByte = Number(localStorage.getItem('adb_novel_last_byte') || '0')
-        readEndByteRef.current = lastByte
-        const pct = meta.fileSize > 0 ? Math.round((lastByte / meta.fileSize) * 100) : 0
-        loadPosition(meta, pct)
+        restorePosition(meta, lastByte)
       }
     } catch { /* ignore */ }
     // 恢复偏好
@@ -88,6 +86,23 @@ export default function NovelReaderPage({ onBack }: Props) {
       const readLen = Math.min(CHUNK_CHARS, meta.fileSize - startByte)
       const endByte = startByte + readLen
       const content = await readFileRange(meta.filePath, startByte, endByte)
+      readEndByteRef.current = endByte
+      setCodeLines(await generateMixedCode(content))
+      scrollRef.current?.scrollTo(0, 0)
+    } catch (e) {
+      setNotification('读取失败: ' + String(e))
+    }
+    setLoading(false)
+  }, [])
+
+  // 按精确字节恢复（不走百分比，避免精度丢失）
+  const restorePosition = useCallback(async (meta: NovelMeta, startByte: number) => {
+    setLoading(true)
+    const clampedStart = Math.max(0, Math.min(startByte, meta.fileSize - 1))
+    try {
+      const readLen = Math.min(CHUNK_CHARS, meta.fileSize - clampedStart)
+      const endByte = clampedStart + readLen
+      const content = await readFileRange(meta.filePath, clampedStart, endByte)
       readEndByteRef.current = endByte
       setCodeLines(await generateMixedCode(content))
       scrollRef.current?.scrollTo(0, 0)
