@@ -62,7 +62,8 @@ async function scanNovelFile(event, { path: filePath }) {
 
         // 正则找章节标题
         const CHAPTER_RE = /(?:^|\n)\s*(?:第[零一二三四五六七八九十百千万\d]+[章节回卷]|Chapter\s+\d+|#[^\n]+|(?:序言|前言|后记|尾声|楔子|番外|引子|终章)[^\n]*)\s*(?:\n|$)/g;
-        const headers: { title: string; pos: number }[] = [];
+        /** @type {{title:string, pos:number}[]} */
+        const headers = [];
         let m;
         while ((m = CHAPTER_RE.exec(content)) !== null) {
             headers.push({ title: m[0].trim(), pos: m.index });
