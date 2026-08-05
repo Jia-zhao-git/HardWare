@@ -1,0 +1,19 @@
+{
+  "sku": "OVERHEAD_Y16GS_SKU_CHN_PLUS",
+  "phys_w": 720,
+  "phys_h": 1328,
+  "direction": 180,
+  "tp_direction": 0,
+  "tp_xoffset": 0,
+  "tp_yoffset": 176,
+  "calibrated": true,
+  "note": "fast_scan",
+  "touch_x_range": [
+    0,
+    719
+  ],
+  "touch_y_range": [
+    176,
+    792
+  ]
+}

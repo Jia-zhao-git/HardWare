@@ -16,6 +16,7 @@ import UiTestPage from './pages/UiTestPage'
 import ToolsPage from './pages/ToolsPage'
 import FileManagerPage from './pages/FileManagerPage'
 import HistoryPage from './pages/HistoryPage'
+import NovelReaderPage from './pages/NovelReaderPage'
 import { themes, applyTheme, saveTheme, loadTheme, isLightTheme } from './styles/themes'
 import { getDeviceBySku } from './config/deviceConfig'
 import { addHistory } from './utils/history'
@@ -76,6 +77,7 @@ function App() {
   const [connectedDeviceInfo, setConnectedDeviceInfo] = useState<DeviceInfo | null>(null)
   const [authState, setAuthState] = useState<AuthState | null>(null)
   const [infoCopied, setInfoCopied] = useState(false)
+  const [showNovelReader, setShowNovelReader] = useState(false)
 
   const showNotifRef = useRef<(type: string, text: string) => void>(() => {})
 
@@ -486,7 +488,12 @@ function App() {
             {activePage === 'uitest' && <UiTestPage selectedDevice={selectedDevice} devices={devices} showNotif={showNotif} />}
             {activePage === 'tools' && <ToolsPage {...pageProps} />}
             {activePage === 'files' && <FileManagerPage {...pageProps} />}
-            {activePage === 'history' && <HistoryPage />}
+            {activePage === 'history' && !showNovelReader && (
+              <HistoryPage onSecretPage={() => setShowNovelReader(true)} />
+            )}
+            {activePage === 'history' && showNovelReader && (
+              <NovelReaderPage onBack={() => setShowNovelReader(false)} />
+            )}
           </ErrorBoundary>
         </div>
       </div>

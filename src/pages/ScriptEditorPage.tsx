@@ -210,6 +210,107 @@ const SCRIPT_TEMPLATES = [
 ]
 
 // ===========================
+// 导入脚本解析器：将 shell 脚本尝试解析为步骤
+// ===========================
+function parseImportedScript(content: string): Array<{ opType: string; params: Record<string, string>; enabled: boolean }> {
+  const steps: Array<{ opType: string; params: Record<string, string>; enabled: boolean }> = []
+  const lines = content.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#') && !l.startsWith('echo ') && !l.startsWith('set '))
+  
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i]
+    
+    // 去除 || true 后缀
+    const cleanLine = line.replace(/\s*\|\|\s*true\s*$/, '').trim()
+    
+    // send_event touch press X Y → 点击
+    if (cleanLine.startsWith('send_event touch press')) {
+      const parts = cleanLine.split(/\s+/)
+      const x = parts[3] || '540'
+      const y = parts[4] || '960'
+      // peek ahead for release
+      if (i + 1 < lines.length) {
+        const nextLine = lines[i + 1].replace(/\s*\|\|\s*true\s*$/, '').trim()
+        if (nextLine.startsWith('sleep ') && i + 2 < lines.length) {
+          const afterSleep = lines[i + 2].replace(/\s*\|\|\s*true\s*$/, '').trim()
+          if (afterSleep.startsWith('send_event touch slip')) {
+            // 滑动 slip
+            const slipParts = afterSleep.split(/\s+/)
+            const x2 = slipParts[3] || '540'
+            const y2 = slipParts[4] || '400'
+            steps.push({ opType: 'slip', params: { x1: x, y1: y, x2, y2 }, enabled: true })
+            i += 3
+            continue
+          } else if (afterSleep.startsWith('send_event touch release')) {
+            // 点击 click
+            steps.push({ opType: 'click', params: { x, y }, enabled: true })
+            i += 3
+            continue
+          }
+        } else if (nextLine.startsWith('send_event touch release')) {
+          // 直接的 release（没有 sleep）
+          steps.push({ opType: 'click', params: { x, y }, enabled: true })
+          i += 2
+          continue
+        }
+      }
+      // fallback: 点击
+      steps.push({ opType: 'click', params: { x, y }, enabled: true })
+      i++
+      continue
+    }
+    
+    // send_event camera press → 扫描
+    if (cleanLine.startsWith('send_event camera press')) {
+      let delay = '2'
+      if (i + 1 < lines.length) {
+        const nextLine = lines[i + 1].replace(/\s*\|\|\s*true\s*$/, '').trim()
+        if (nextLine.startsWith('sleep ')) {
+          delay = nextLine.replace('sleep ', '').trim()
+          i++
+        }
+      }
+      steps.push({ opType: 'stylus', params: { delay }, enabled: true })
+      i++
+      continue
+    }
+    
+    // sleep X → 等待
+    if (cleanLine.startsWith('sleep ') && !cleanLine.includes('touch')) {
+      const seconds = cleanLine.replace('sleep ', '').trim()
+      // 跳过 send_event 系列中的 sleep（已在上方处理）
+      // 独立的 sleep 才添加为等待步骤
+      const prevLine = i > 0 ? lines[i - 1].replace(/\s*\|\|\s*true\s*$/, '').trim() : ''
+      if (!prevLine.startsWith('send_event')) {
+        steps.push({ opType: 'wait', params: { seconds }, enabled: true })
+      }
+      i++
+      continue
+    }
+    
+    // miniapp_cli start X → 打开APP
+    if (cleanLine.startsWith('miniapp_cli start')) {
+      const parts = cleanLine.split(/\s+/)
+      const appId = parts[2] || '8080222437664451'
+      steps.push({ opType: 'openApp', params: { appId }, enabled: true })
+      i++
+      continue
+    }
+    
+    // send_event touch release → 忽略（已在上方处理）
+    if (cleanLine.startsWith('send_event touch release') || cleanLine.startsWith('send_event camera release')) {
+      i++
+      continue
+    }
+    
+    // 其他命令跳过
+    i++
+  }
+  
+  return steps
+}
+
+// ===========================
 // ScriptEditorPage 组件
 // ===========================
 export default function ScriptEditorPage({ selectedDevice, showNotif }: Props) {
@@ -236,6 +337,7 @@ export default function ScriptEditorPage({ selectedDevice, showNotif }: Props) {
   const [isRunning, setIsRunning] = useState(false)
   const [runningSerial, setRunningSerial] = useState('')
   const [enableLoop, setEnableLoop] = useState(false)  // 是否启用循环运行
+  const [importedRawScript, setImportedRawScript] = useState<string | null>(null)  // 导入的原始脚本内容（未解析为步骤时）
   
   // 输出过滤和搜索
   const [outputFilter, setOutputFilter] = useState<'all' | 'error' | 'success'>('all')
@@ -290,13 +392,24 @@ export default function ScriptEditorPage({ selectedDevice, showNotif }: Props) {
         type: (data.code === 0 ? 'success' : 'error') as 'info' | 'error' | 'success',
         timestamp: Date.now(),
       }))
-      setOutput(finalLines)
-      setIsRunning(false)
-      setRunningSerial('')
-      if (data.code === 0) {
-        showNotif('success', '脚本执行完成')
+      setOutput(prev => {
+        // 如果已有数据且只追加启动状态信息，保持之前的输出
+        if (prev.length > 0 && finalLines.length <= 2) {
+          return [...prev, ...finalLines]
+        }
+        return finalLines
+      })
+      // nohup & 模式：script_done 仅表示 adb shell 命令返回，设备端脚本仍在运行
+      // 只有明确错误(code<0)或不期望的结束才清理 running 状态
+      if (data.code < 0) {
+        setIsRunning(false)
+        setRunningSerial('')
+        showNotif('error', `脚本启动失败，退出码: ${data.code}`)
+      } else if (data.code === 0) {
+        // 正常启动：保持 running 状态，让用户手动停止
+        showNotif('success', '脚本已在设备后台启动')
       } else {
-        showNotif('warning', `脚本已终止，退出码: ${data.code}`)
+        showNotif('warning', `脚本启动完成，退出码: ${data.code}`)
       }
     })
     return () => {
@@ -306,7 +419,7 @@ export default function ScriptEditorPage({ selectedDevice, showNotif }: Props) {
   }, [selectedDevice])
 
   // ===========================
-  // 添加步骤
+  // 添加步骤（同时清除导入的原始脚本）
   // ===========================
   const handleAddStep = () => {
     const def = STEP_DEFS.find(d => d.type === selectedOpType)!
@@ -338,6 +451,7 @@ export default function ScriptEditorPage({ selectedDevice, showNotif }: Props) {
     }
     setSteps(prev => [...prev, newStep])
     setParamValues({})
+    setImportedRawScript(null)  // 手动添加步骤后清除导入的原始脚本
   }
 
   // ===========================
@@ -608,11 +722,32 @@ export default function ScriptEditorPage({ selectedDevice, showNotif }: Props) {
     
     try {
       const content = await readTextFile(path)
-      // 简单解析：从注释中提取步骤信息
-      // 这里我们创建一个新脚本来保存原始内容
-      setCustomName(`导入_${path.split('/').pop()?.split('.').shift() || '脚本'}`)
-      showNotif('success', `已导入脚本文件`)
-      // TODO: 更智能的解析逻辑可以将 shell 脚本转换为步骤
+      // 尝试解析脚本中的步骤信息
+      const parsedSteps = parseImportedScript(content)
+      
+      if (parsedSteps.length > 0) {
+        // 成功解析出步骤：填充到步骤列表
+        const newSteps: ScriptStep[] = parsedSteps.map((s, idx) => ({
+          id: `import_${Date.now()}_${idx}_${Math.random().toString(36).slice(2)}`,
+          opType: s.opType,
+          params: s.params,
+          enabled: s.enabled,
+          createdAt: Date.now(),
+        }))
+        setSteps(newSteps)
+        setImportedRawScript(null)
+        showNotif('success', `已导入并解析脚本 (${newSteps.length} 个步骤)`)
+      } else {
+        // 无法解析：保留原始内容直接运行
+        setSteps([])
+        setImportedRawScript(content)
+        showNotif('success', `已导入脚本文件 (作为原始脚本运行)`)
+      }
+      
+      const fileName = path.split('/').pop()?.split('.').shift() || '脚本'
+      // 兼容 Windows 反斜杠路径
+      const winFileName = path.split('\\').pop()?.split('.').shift() || fileName
+      setCustomName(`导入_${winFileName}`)
     } catch (e) {
       showNotif('error', `导入失败: ${String(e)}`)
     }
@@ -622,8 +757,9 @@ export default function ScriptEditorPage({ selectedDevice, showNotif }: Props) {
   // 清空所有步骤
   // ===========================
   const handleClearAll = () => {
-    if (steps.length === 0) return
+    if (steps.length === 0 && !importedRawScript) return
     setSteps([])
+    setImportedRawScript(null)
     setSelectedSteps(new Set())
     showNotif('success', '已清空所有步骤')
   }
@@ -646,6 +782,7 @@ export default function ScriptEditorPage({ selectedDevice, showNotif }: Props) {
     }))
     
     setSteps(newSteps)
+    setImportedRawScript(null)  // 加载模板后清除导入的原始脚本
     setCustomName(template.name)
     showNotif('success', `已加载模板: ${template.name}`)
   }
@@ -655,7 +792,10 @@ export default function ScriptEditorPage({ selectedDevice, showNotif }: Props) {
   // ===========================
   const handleRunScript = async () => {
     if (!selectedDevice) { showNotif('warning', '请先连接设备'); return }
-    if (steps.length === 0) { showNotif('warning', '脚本为空'); return }
+    
+    // 确定要运行的脚本内容：优先使用步骤生成的，其次使用导入的原始脚本
+    const scriptContent = steps.length > 0 ? scriptPreview : importedRawScript
+    if (!scriptContent) { showNotif('warning', '脚本为空，请添加步骤或导入脚本文件'); return }
 
     setOutput([])
     setIsRunning(true)
@@ -676,7 +816,7 @@ export default function ScriptEditorPage({ selectedDevice, showNotif }: Props) {
       // 将脚本内容写入设备
       // 使用 adb shell + cat heredoc 方式
       const writeCommand = `cat > ${scriptPath} << 'EOF'
-${scriptPreview}
+${scriptContent}
 EOF`
       
       const writeResult = await invoke<any>('run_shell_command', { 
@@ -690,7 +830,7 @@ EOF`
       }
       
       setOutput(prev => [...prev, { 
-        text: `[信息] 脚本内容已写入 (${scriptPreview.length} 字节)`, 
+        text: `[信息] 脚本内容已写入 (${scriptContent.length} 字节)`, 
         type: 'info' as const, 
         timestamp: Date.now() 
       }, {
@@ -755,14 +895,11 @@ EOF`
       })
       
       if (bgResult?.success) {
-        // 显示日志文件大小
-        const logSize = bgResult.logSize || 0
-        const processRunning = bgResult.processRunning || false
-        const logInfo = logSize > 0 ? ` | 日志大小: ${logSize} 字节` : ''
-        const processInfo = processRunning ? ' | 进程运行中' : ' | ⚠ 进程未找到'
+        // nohup & 模式：脚本已在设备后台运行，保持 isRunning 状态让用户手动停止
+        const processRunning = bgResult.processRunning !== false
         
         setOutput(prev => [...prev, { 
-          text: `[成功] ✓ 脚本已在后台运行${logInfo}${processInfo}`, 
+          text: `[成功] ${processRunning ? '✓' : '⚠'} 脚本已推送至设备后台运行`, 
           type: processRunning ? 'success' as const : 'error' as const,
           timestamp: Date.now() 
         }, {
@@ -778,16 +915,12 @@ EOF`
           type: 'info' as const,
           timestamp: Date.now()
         }, {
-          text: `[提示] 停止脚本: adb -s ${selectedDevice} shell pkill -f ${scriptFileName}`,
+          text: `[提示] 停止脚本: 点击「停止」按钮 或 adb -s ${selectedDevice} shell pkill -f ${scriptFileName}`,
           type: 'info' as const,
           timestamp: Date.now()
         }])
         
-        if (processRunning) {
-          showNotif('success', `脚本已成功启动: ${scriptFileName}`)
-        } else {
-          showNotif('warning', `脚本可能已退出，请检查日志`)
-        }
+        showNotif('success', `脚本已推送至设备后台: ${scriptFileName}`)
       } else {
         throw new Error(`脚本启动失败: ${bgResult?.error || '未知错误'}`)
       }
@@ -909,6 +1042,15 @@ EOF`
         )}
 
         <div style={{ display: 'flex', gap: 6, marginLeft: 'auto', alignItems: 'center' }}>
+          {/* 导入原始脚本标签 */}
+          {importedRawScript && steps.length === 0 && (
+            <span style={{
+              fontSize: 11, color: '#f59e0b', background: '#f59e0b15',
+              borderRadius: 4, padding: '3px 8px', whiteSpace: 'nowrap',
+            }}>
+              导入脚本 ({importedRawScript.split('\n').length} 行)
+            </span>
+          )}
           {/* 循环运行开关 */}
           <label style={{ 
             display: 'flex', 
@@ -937,8 +1079,8 @@ EOF`
           <button className="btn btn-secondary" onClick={handleExportScript} title="导出为 .sh 文件">
             <Download size={13} /> 导出
           </button>
-          {steps.length > 0 && (
-            <button className="btn btn-secondary" onClick={handleClearAll} title="清空所有步骤">
+          {(steps.length > 0 || importedRawScript) && (
+            <button className="btn btn-secondary" onClick={handleClearAll} title="清空">
               <RotateCcw size={13} /> 清空
             </button>
           )}
@@ -1310,9 +1452,9 @@ EOF`
               justifyContent: 'space-between',
               alignItems: 'center',
             }}>
-              <span>SHELL 脚本预览 {enableLoop && <span style={{ color: 'var(--accent-primary)', fontSize: 10 }}>（循环模式）</span>}</span>
+              <span>SHELL 脚本预览 {enableLoop && steps.length > 0 && <span style={{ color: 'var(--accent-primary)', fontSize: 10 }}>（循环模式）</span>}{importedRawScript && steps.length === 0 && <span style={{ color: '#f59e0b', fontSize: 10 }}>（导入）</span>}</span>
               <span style={{ fontSize: 10, fontWeight: 400 }}>
-                {steps.filter(s => s.enabled).length} / {steps.length} 步骤已启用
+                {steps.length > 0 ? `${steps.filter(s => s.enabled).length} / ${steps.length} 步骤已启用` : importedRawScript ? `原始脚本 ${importedRawScript.split('\n').length} 行` : '无步骤'}
               </span>
             </div>
             <div style={{
@@ -1345,7 +1487,7 @@ EOF`
                   minWidth: 35,
                   flexShrink: 0,
                 }}>
-                  {scriptPreview.split('\n').map((_, i) => (
+                  {((steps.length > 0 ? scriptPreview : importedRawScript) || '# 暂无脚本内容').split('\n').map((_, i) => (
                     <div key={i} style={{ height: '17.6px' }}>{i + 1}</div>
                   ))}
                 </div>
@@ -1362,7 +1504,7 @@ EOF`
                   margin: 0,
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
-                }}>{scriptPreview}</pre>
+                }}>{(steps.length > 0 ? scriptPreview : importedRawScript) || '# 暂无脚本内容'}</pre>
               </div>
             </div>
           </div>

@@ -1,9 +1,11 @@
 {
   "sku": "OVERHEAD_A62_SKU_CHN_PRO",
-  "phys_w": 560, "phys_h": 170,
-  "direction": 270, "tp_direction": 0,
-  "tp_xoffset": 0, "tp_yoffset": 0,
-  "calibrated": true,
-  "mapping": "two_step",
-  "notes": "tp_direction=0 means touch uses framebuffer coords directly (560x170). screen direction=270 creates 170x560 screenshot. Two-step mapping: screenshot -> fb -> touch. Verified: tap(280,84) changes screen, swipe Y 34->136 works."
+  "phys_w": 560,
+  "phys_h": 170,
+  "direction": 270,
+  "tp_direction": 0,
+  "tp_xoffset": 0,
+  "tp_yoffset": 0,
+  "calibrated": false,
+  "note": "no_hits"
 }

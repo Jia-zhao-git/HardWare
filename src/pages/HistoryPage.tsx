@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { History, Trash2, Clock, Smartphone, Battery, Terminal, FlaskConical, Camera, FileText, Wrench, RotateCcw, Zap, Download, Activity, Package, FolderOpen } from 'lucide-react'
 import { getHistory, HistoryEntry } from '../utils/history'
 
@@ -24,10 +24,16 @@ function formatTime(ts: number) {
   return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-export default function HistoryPage() {
+interface Props {
+  onSecretPage?: () => void
+}
+
+export default function HistoryPage({ onSecretPage }: Props) {
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [filter, setFilter] = useState<string>('all')
   const [searchText, setSearchText] = useState('')
+  const clickCountRef = useRef(0)
+  const clickTimerRef = useRef<NodeJS.Timeout | null>(null)
 
   const loadHistory = () => { setHistory(getHistory()) }
 
@@ -46,6 +52,18 @@ export default function HistoryPage() {
 
   const categories = [...new Set(history.map(h => h.category))]
 
+  // 三连击"设备"按钮触发隐藏页面
+  const handleDeviceClick = () => {
+    clickCountRef.current += 1
+    if (clickTimerRef.current) clearTimeout(clickTimerRef.current)
+    if (clickCountRef.current >= 3) {
+      clickCountRef.current = 0
+      onSecretPage?.()
+    } else {
+      clickTimerRef.current = setTimeout(() => { clickCountRef.current = 0 }, 2000)
+    }
+  }
+
   return (
     <div>
       <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -60,7 +78,15 @@ export default function HistoryPage() {
           <button className={`btn btn-sm ${filter === 'all' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setFilter('all')} style={{ padding: '4px 10px', fontSize: 11 }}>全部</button>
           {categories.map(cat => {
             const cfg = CATEGORY_CONFIG[cat]; return (
-              <button key={cat} className={`btn btn-sm ${filter === cat ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setFilter(cat)} style={{ padding: '4px 10px', fontSize: 11 }}>
+              <button
+                key={cat}
+                className={`btn btn-sm ${filter === cat ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => {
+                  setFilter(cat)
+                  if (cat === 'device') handleDeviceClick()
+                }}
+                style={{ padding: '4px 10px', fontSize: 11 }}
+              >
                 {cfg?.label || cat}
               </button>
             )

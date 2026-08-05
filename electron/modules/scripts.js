@@ -8,45 +8,62 @@ const { getState } = require('./context');
 
 async function run_script_background(event, { serial, scriptPath, logPath }) {
     const adbPath = getState().adbPath || 'adb';
-    const proc = spawn(adbPath, ['-s', serial, 'shell', 'sh', scriptPath], {
-        windowsHide: true,
-        detached: false,
-    });
-    let output = '';
-    proc.stdout.on('data', (d) => {
-        const text = d.toString();
-        output += text;
-        if (!event.sender.isDestroyed()) {
-            event.sender.send('script_output', { serial, line: text, lines: [text] });
-        }
-    });
-    proc.stderr.on('data', (d) => {
-        const text = d.toString();
-        if (!event.sender.isDestroyed()) {
-            event.sender.send('script_output', { serial, line: text, type: 'error', lines: [text] });
-        }
-    });
-    proc.on('close', (code) => {
-        // Write log if logPath provided
-        if (logPath && output) {
-            try {
-                fs.mkdirSync(path.dirname(logPath), { recursive: true });
-                fs.writeFileSync(logPath, output, 'utf8');
-            } catch (e) {
-                // ignore write errors
+    // 使用交互式 shell 模式（与 start_stability_test 一致）：
+    // spawn adb shell → stdin 写入 nohup sh script & → stdin 写入 exit
+    // 这样 nohup 进程在交互 shell 退出后变成孤儿被 init 接管，真正在后台运行
+    return new Promise((resolve) => {
+        const proc = spawn(adbPath, ['-s', serial, 'shell'], {
+            windowsHide: true,
+        });
+        let output = '';
+        let resolved = false;
+        const doResolve = (success, msg, err) => {
+            if (resolved) return;
+            resolved = true;
+            try { proc.kill(); } catch {}
+            resolve({ success, output: msg, error: err, processRunning: success });
+        };
+        proc.stdout.on('data', (d) => {
+            const text = d.toString();
+            output += text;
+            if (!event.sender.isDestroyed()) {
+                event.sender.send('script_output', { serial, line: text, lines: [text] });
             }
+        });
+        proc.stderr.on('data', (d) => {
+            const text = d.toString();
+            output += text;
+            if (!event.sender.isDestroyed()) {
+                event.sender.send('script_output', { serial, line: text, type: 'error', lines: [text] });
+            }
+        });
+        proc.on('close', (code) => {
+            if (!event.sender.isDestroyed()) {
+                event.sender.send('script_done', { serial, code: code || 0 });
+            }
+            doResolve(true, '后台脚本已启动', null);
+        });
+        proc.on('error', (e) => {
+            if (!event.sender.isDestroyed()) {
+                event.sender.send('script_done', { serial, code: -1, error: e.message });
+            }
+            doResolve(false, '', e.message);
+        });
+        // chmod 赋权
+        proc.stdin.write(`chmod 755 ${scriptPath}\n`);
+        // kill 已有进程（同名脚本）
+        const scriptName = path.basename(scriptPath);
+        proc.stdin.write(`pkill -f ${scriptName} 2>/dev/null\n`);
+        // 启动脚本（nohup + &，与稳定性测试一致）
+        if (logPath) {
+            proc.stdin.write(`nohup sh ${scriptPath} > ${logPath} 2>&1 &\n`);
+        } else {
+            proc.stdin.write(`nohup sh ${scriptPath} > /dev/null 2>&1 &\n`);
         }
-        if (!event.sender.isDestroyed()) {
-            event.sender.send('script_done', { serial, code, lines: output.split('\n').filter(l => l.trim()) });
-        }
+        proc.stdin.write('exit\n');
+        // 超时保护：3 秒内未 resolve 也返回成功
+        setTimeout(() => doResolve(true, '后台脚本已启动', null), 3000);
     });
-    proc.on('error', (e) => {
-        if (!event.sender.isDestroyed()) {
-            event.sender.send('script_done', { serial, code: -1, error: e.message });
-        }
-    });
-    // Don't keep reference — background script runs independently
-    return { success: true, output: '后台脚本已启动', error: null };
 }
 
 async function stop_script(event, { serial }) {
