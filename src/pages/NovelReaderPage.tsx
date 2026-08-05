@@ -57,9 +57,11 @@ export default function NovelReaderPage({ onBack }: Props) {
         const meta: NovelMeta = JSON.parse(saved)
         setNovelMeta(meta)
         fileSizeRef.current = meta.fileSize
-        // 恢复上次阅读位置
-        const lastPct = Number(localStorage.getItem('adb_novel_last_pct') || '0')
-        loadPosition(meta, lastPct)
+        // 恢复上次阅读字节位置
+        const lastByte = Number(localStorage.getItem('adb_novel_last_byte') || '0')
+        readEndByteRef.current = lastByte
+        const pct = meta.fileSize > 0 ? Math.round((lastByte / meta.fileSize) * 100) : 0
+        loadPosition(meta, pct)
       }
     } catch { /* ignore */ }
     // 恢复偏好
@@ -69,12 +71,11 @@ export default function NovelReaderPage({ onBack }: Props) {
     if (s) setFontSize(Number(s))
   }, [])
 
-  // 退出/卸载时保存阅读位置
+  // 退出/卸载时保存阅读字节位置
   useEffect(() => {
     return () => {
       if (novelMeta && readEndByteRef.current > 0) {
-        const pct = Math.round((readEndByteRef.current / novelMeta.fileSize) * 100)
-        localStorage.setItem('adb_novel_last_pct', String(pct))
+        localStorage.setItem('adb_novel_last_byte', String(readEndByteRef.current))
       }
     }
   }, [novelMeta])
@@ -187,7 +188,7 @@ export default function NovelReaderPage({ onBack }: Props) {
 
   const clearNovel = () => {
     localStorage.removeItem('adb_novel_meta')
-    localStorage.removeItem('adb_novel_last_pct')
+    localStorage.removeItem('adb_novel_last_byte')
     setNovelMeta(null)
     setCodeLines([])
     readEndByteRef.current = 0
