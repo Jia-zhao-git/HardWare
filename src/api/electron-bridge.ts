@@ -81,6 +81,15 @@ export async function readTextFile(path: string): Promise<string> {
   return result.content;
 }
 
+// 按字节偏移读大文件片段，避免 20MB+ 文件全部加载到内存
+export async function readFileRange(path: string, start: number, end: number): Promise<string> {
+  const result = await invoke<{ success: boolean; content?: string; error?: string }>('read_file_range', { path, start, end });
+  if (!result.success || !result.content) {
+    throw new Error(result.error || 'Failed to read file range');
+  }
+  return result.content;
+}
+
 // Script editor file operations (local filesystem)
 export interface ScriptMeta { name: string; filename: string; serial: string; modified: string }
 export async function setScriptsDir(dir: string): Promise<void> {

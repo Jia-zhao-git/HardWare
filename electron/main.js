@@ -161,6 +161,14 @@ function registerFileHandlers() {
     if (files.readFile) {
         ipcMain.handle('read_file', (event, args) => files.readFile(event, args));
     }
+    // read_file_range (按字节偏移读文件片段)
+    if (files.readFileRange) {
+        ipcMain.handle('read_file_range', (event, args) => files.readFileRange(event, args));
+    }
+    // scan_novel_file (扫描小说章节偏移，不返回正文)
+    if (files.scanNovelFile) {
+        ipcMain.handle('scan_novel_file', (event, args) => files.scanNovelFile(event, args));
+    }
 }
 
 // ============================================================================
