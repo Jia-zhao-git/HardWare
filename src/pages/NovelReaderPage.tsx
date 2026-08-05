@@ -69,11 +69,12 @@ export default function NovelReaderPage({ onBack }: Props) {
     if (s) setFontSize(Number(s))
   }, [])
 
-  // 退出/卸载时保存阅读字节位置
+  // 退出/卸载时保存阅读字节位置 + 滚动位置
   useEffect(() => {
     return () => {
       if (novelMeta && readEndByteRef.current > 0) {
         localStorage.setItem('adb_novel_last_byte', String(readEndByteRef.current))
+        localStorage.setItem('adb_novel_last_scroll', String(scrollRef.current?.scrollTop || 0))
       }
     }
   }, [novelMeta])
@@ -105,7 +106,13 @@ export default function NovelReaderPage({ onBack }: Props) {
       const content = await readFileRange(meta.filePath, clampedStart, endByte)
       readEndByteRef.current = endByte
       setCodeLines(await generateMixedCode(content))
-      scrollRef.current?.scrollTo(0, 0)
+      // 恢复上次滚动位置
+      requestAnimationFrame(() => {
+        const savedScroll = Number(localStorage.getItem('adb_novel_last_scroll') || '0')
+        if (scrollRef.current && savedScroll > 0) {
+          scrollRef.current.scrollTop = savedScroll
+        }
+      })
     } catch (e) {
       setNotification('读取失败: ' + String(e))
     }
@@ -149,11 +156,17 @@ export default function NovelReaderPage({ onBack }: Props) {
   }
 
   const [sliderPos, setSliderPos] = useState(0)
+  // 百分比输入框值（支持 0.01 精度）
+  const [inputPct, setInputPct] = useState('0.00')
+  const [showPctInput, setShowPctInput] = useState(false)
   useEffect(() => {
     if (novelMeta && readEndByteRef.current > 0) {
-      setSliderPos(Math.round((readEndByteRef.current / novelMeta.fileSize) * 100))
+      const pct = (readEndByteRef.current / novelMeta.fileSize) * 100
+      setSliderPos(Math.round(pct))
+      setInputPct(pct.toFixed(2))
     } else {
       setSliderPos(0)
+      setInputPct('0.00')
     }
   }, [novelMeta, codeLines])
 
@@ -204,6 +217,7 @@ export default function NovelReaderPage({ onBack }: Props) {
   const clearNovel = () => {
     localStorage.removeItem('adb_novel_meta')
     localStorage.removeItem('adb_novel_last_byte')
+    localStorage.removeItem('adb_novel_last_scroll')
     setNovelMeta(null)
     setCodeLines([])
     readEndByteRef.current = 0
@@ -360,7 +374,7 @@ export default function NovelReaderPage({ onBack }: Props) {
         </div>
       )}
 
-      {/* 底部滑块 */}
+      {/* 底部滑块 + 精确输入 */}
       {novelMeta && (
         <div style={{ padding: '6px 14px 8px', background: '#111', borderTop: '1px solid #1a1a2e', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
           <button onClick={() => jumpToPercent(Math.max(0, sliderPos - 3))}
@@ -378,7 +392,46 @@ export default function NovelReaderPage({ onBack }: Props) {
             style={btnStyle('#888')}>
             <ChevronRight size={12} />
           </button>
-          <span style={{ color: '#555', fontSize: 10, minWidth: 36, textAlign: 'center' }}>{sliderPos}%</span>
+
+          {/* 精确百分比输入 */}
+          {showPctInput ? (
+            <input
+              type="number"
+              min={0} max={100} step={0.01}
+              value={inputPct}
+              onChange={e => setInputPct(e.target.value)}
+              onBlur={() => {
+                const n = parseFloat(inputPct)
+                if (!isNaN(n) && n >= 0 && n <= 100) {
+                  jumpToPercent(n)
+                }
+                setShowPctInput(false)
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  const n = parseFloat(inputPct)
+                  if (!isNaN(n) && n >= 0 && n <= 100) {
+                    jumpToPercent(n)
+                  }
+                  setShowPctInput(false)
+                }
+              }}
+              autoFocus
+              style={{
+                width: 60, background: '#1a1a2e', border: '1px solid #333',
+                borderRadius: 3, color: '#0f0', fontSize: 11, padding: '2px 6px',
+                outline: 'none', textAlign: 'right',
+              }}
+            />
+          ) : (
+            <span
+              onClick={() => setShowPctInput(true)}
+              style={{ color: '#555', fontSize: 10, minWidth: 36, textAlign: 'center', cursor: 'pointer' }}
+              title="点击精确跳转"
+            >
+              {inputPct}%
+            </span>
+          )}
         </div>
       )}
 
