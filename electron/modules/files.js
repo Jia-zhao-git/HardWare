@@ -4,6 +4,34 @@ const { dialog, BrowserWindow } = require('electron');
 const fs = require('fs');
 const { getState } = require('./context');
 
+// 修剪末尾不完整的多字节字符（UTF-8 / GBK）
+function trimIncompleteChar(buf) {
+    if (!buf || buf.length === 0) return buf;
+    // 先判断是否 UTF-8（BOM 或低错误率）
+    const isUtf8Bom = buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF;
+    const sample = buf.toString('utf-8');
+    let bad = 0;
+    for (let i = 0; i < sample.length; i++) {
+        const c = sample.charCodeAt(i);
+        if (c === 0xFFFD || (c >= 0xDC00 && c <= 0xDFFF)) bad++;
+    }
+    if (isUtf8Bom || bad <= Math.max(sample.length * 0.01, 3)) {
+        // UTF-8: 从末尾找到完整字符边界
+        let i = buf.length - 1;
+        while (i > 0 && (buf[i] & 0xC0) === 0x80) i--; // 跳过延续字节
+        const lead = buf[i];
+        const seqLen = lead < 0x80 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
+        if (i + seqLen > buf.length) return buf.subarray(0, i);
+        return buf;
+    } else {
+        // GBK: 双字节，末尾奇数字节可能是半个汉字
+        // 简单判断：最后一个字节是否是 GBK 高字节（0x81-0xFE）
+        const last = buf[buf.length - 1];
+        if (last >= 0x81 && last <= 0xFE) return buf.subarray(0, buf.length - 1);
+        return buf;
+    }
+}
+
 // GBK/UTF-8 自动检测解码
 function decodeBuffer(raw) {
     // UTF-8 BOM: EF BB BF
@@ -69,9 +97,12 @@ async function readFileRange(event, { path: filePath, start, end }) {
         const length = end - start;
         const buffer = Buffer.alloc(length);
         const fd = fs.openSync(filePath, 'r');
-        fs.readSync(fd, buffer, 0, length, start);
+        const bytesRead = fs.readSync(fd, buffer, 0, length, start);
         fs.closeSync(fd);
-        return { success: true, content: decodeBuffer(buffer) };
+        const raw = bytesRead < length ? buffer.subarray(0, bytesRead) : buffer;
+        // 修剪末尾不完整的多字节字符（UTF-8 / GBK）
+        const trimmed = trimIncompleteChar(raw);
+        return { success: true, content: decodeBuffer(trimmed) };
     } catch (e) {
         return { success: false, error: e.message };
     }
@@ -91,7 +122,7 @@ async function scanNovelFile(event, { path: filePath }) {
         fs.closeSync(fd);
 
         const preview = decodeBuffer(raw);
-        return { success: true, fileSize, preview };
+        return { success: true, fileSize, previewBytes: previewLen, preview };
     } catch (e) {
         return { success: false, error: e.message };
     }

@@ -40,6 +40,7 @@ export default function NovelReaderPage({ onBack }: Props) {
   const autoLoadingRef = useRef(false)
   const readEndByteRef = useRef(0)
   const fileSizeRef = useRef(0)
+  const pendingScrollRef = useRef(0)
 
   // 自定义：注释颜色 + 字号
   const [commentColor, setCommentColor] = useState('#0a0')
@@ -79,6 +80,14 @@ export default function NovelReaderPage({ onBack }: Props) {
     }
   }, [novelMeta])
 
+  // 恢复滚动位置（等 codeLines 渲染完成后）
+  useEffect(() => {
+    if (pendingScrollRef.current > 0 && scrollRef.current) {
+      scrollRef.current.scrollTop = pendingScrollRef.current
+      pendingScrollRef.current = 0
+    }
+  }, [codeLines])
+
   const loadPosition = useCallback(async (meta: NovelMeta, pct: number) => {
     setLoading(true)
     const clamped = Math.max(0, Math.min(100, pct))
@@ -105,14 +114,9 @@ export default function NovelReaderPage({ onBack }: Props) {
       const endByte = clampedStart + readLen
       const content = await readFileRange(meta.filePath, clampedStart, endByte)
       readEndByteRef.current = endByte
+      const savedScroll = Number(localStorage.getItem('adb_novel_last_scroll') || '0')
+      if (savedScroll > 0) pendingScrollRef.current = savedScroll
       setCodeLines(await generateMixedCode(content))
-      // 恢复上次滚动位置
-      requestAnimationFrame(() => {
-        const savedScroll = Number(localStorage.getItem('adb_novel_last_scroll') || '0')
-        if (scrollRef.current && savedScroll > 0) {
-          scrollRef.current.scrollTop = savedScroll
-        }
-      })
     } catch (e) {
       setNotification('读取失败: ' + String(e))
     }
@@ -189,6 +193,7 @@ export default function NovelReaderPage({ onBack }: Props) {
         success: boolean
         preview?: string
         fileSize?: number
+        previewBytes?: number
         error?: string
       }>('scan_novel_file', { path: filePath })
       if (!result?.success || result.fileSize == null) {
@@ -201,7 +206,7 @@ export default function NovelReaderPage({ onBack }: Props) {
       localStorage.setItem('adb_novel_meta', JSON.stringify(meta))
       setNovelMeta(meta)
       fileSizeRef.current = result.fileSize
-      readEndByteRef.current = Math.min(CHUNK_CHARS, result.fileSize)
+      readEndByteRef.current = result.previewBytes ?? Math.min(CHUNK_CHARS, result.fileSize)
       setSliderPos(0)
       if (result.preview) setCodeLines(await generateMixedCode(result.preview))
       setShowNovel(true)
