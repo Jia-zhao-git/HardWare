@@ -1,6 +1,9 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { invoke, open as openDialog, readFileRange } from '../api/electron-bridge'
-import { ArrowLeft, BookOpen, Eye, EyeOff, Upload, Trash2, Code2, ChevronLeft, ChevronRight } from 'lucide-react'
+import {
+  ArrowLeft, BookOpen, Eye, EyeOff, Upload, Trash2, Code2,
+  ChevronLeft, ChevronRight, Palette, Baseline
+} from 'lucide-react'
 
 interface NovelMeta {
   filePath: string
@@ -13,7 +16,18 @@ interface Props {
   onBack: () => void
 }
 
-const CHUNK_CHARS = 8000  // 每段加载的字符数
+const CHUNK_CHARS = 8000
+
+const COMMENT_COLORS = [
+  { label: '绿', value: '#0a0' },
+  { label: '灰', value: '#888' },
+  { label: '蓝', value: '#5af' },
+  { label: '黄', value: '#da2' },
+  { label: '青', value: '#0cc' },
+  { label: '紫', value: '#c0f' },
+]
+
+const FONT_SIZES = [10, 11, 12, 13, 14, 15, 16, 18]
 
 export default function NovelReaderPage({ onBack }: Props) {
   const [novelMeta, setNovelMeta] = useState<NovelMeta | null>(null)
@@ -24,12 +38,16 @@ export default function NovelReaderPage({ onBack }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const loadedRef = useRef(false)
   const autoLoadingRef = useRef(false)
-  // 关键：记录已读到文件的哪个字节位置，自动加载紧接此位置继续
   const readEndByteRef = useRef(0)
-  // 记录文件总字节
   const fileSizeRef = useRef(0)
 
-  // 恢复小说元信息
+  // 自定义：注释颜色 + 字号
+  const [commentColor, setCommentColor] = useState('#0a0')
+  const [fontSize, setFontSize] = useState(12)
+  const [showColorPicker, setShowColorPicker] = useState(false)
+  const [showFontPicker, setShowFontPicker] = useState(false)
+
+  // 恢复
   useEffect(() => {
     if (loadedRef.current) return
     loadedRef.current = true
@@ -43,9 +61,13 @@ export default function NovelReaderPage({ onBack }: Props) {
         loadPosition(meta, 0)
       }
     } catch { /* ignore */ }
+    // 恢复偏好
+    const c = localStorage.getItem('adb_novel_comment_color')
+    if (c) setCommentColor(c)
+    const s = localStorage.getItem('adb_novel_font_size')
+    if (s) setFontSize(Number(s))
   }, [])
 
-  // 按百分比跳转 → 替换当前内容
   const loadPosition = useCallback(async (meta: NovelMeta, pct: number) => {
     setLoading(true)
     const clamped = Math.max(0, Math.min(100, pct))
@@ -55,8 +77,7 @@ export default function NovelReaderPage({ onBack }: Props) {
       const endByte = startByte + readLen
       const content = await readFileRange(meta.filePath, startByte, endByte)
       readEndByteRef.current = endByte
-      setCodeLines(generateMixedCode(content))
-      // 滚动回顶部
+      setCodeLines(await generateMixedCode(content))
       scrollRef.current?.scrollTo(0, 0)
     } catch (e) {
       setNotification('读取失败: ' + String(e))
@@ -64,7 +85,6 @@ export default function NovelReaderPage({ onBack }: Props) {
     setLoading(false)
   }, [])
 
-  // 自动加载 — 紧接上次读取的末尾继续
   const appendNextChunk = useCallback(async () => {
     if (autoLoadingRef.current) return
     autoLoadingRef.current = true
@@ -79,36 +99,29 @@ export default function NovelReaderPage({ onBack }: Props) {
     try {
       const content = await readFileRange(novelMeta!.filePath, startByte, endByte)
       readEndByteRef.current = endByte
-      setCodeLines(prev => [...prev, ...generateMixedCode(content)])
+      const mixed = await generateMixedCode(content)
+      setCodeLines(prev => [...prev, ...mixed])
     } catch (e) {
       setNotification('加载失败: ' + String(e))
     }
     autoLoadingRef.current = false
   }, [novelMeta])
 
-  // 滚动到底部自动加载
+  // 滚动到底部触发加载（阈值 200px，避免空白区域不够触发）
   const handleScroll = useCallback(() => {
     if (loading || readEndByteRef.current >= fileSizeRef.current) return
     const el = scrollRef.current
     if (!el) return
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
-    if (nearBottom) {
-      appendNextChunk()
-    }
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200
+    if (nearBottom) appendNextChunk()
   }, [loading, appendNextChunk])
 
-  // 跳转到指定百分比（手动拖拽滑块）
   const jumpToPercent = (pct: number) => {
     if (!novelMeta) return
     loadPosition(novelMeta, pct)
   }
 
-  const handleSlider = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // 拖拽中只更新滑块 position，不读盘
-    setSliderPos(Number(e.target.value))
-  }
   const [sliderPos, setSliderPos] = useState(0)
-  // 同步 slider 位置
   useEffect(() => {
     if (novelMeta && readEndByteRef.current > 0) {
       setSliderPos(Math.round((readEndByteRef.current / novelMeta.fileSize) * 100))
@@ -117,13 +130,13 @@ export default function NovelReaderPage({ onBack }: Props) {
     }
   }, [novelMeta, codeLines])
 
-  const handleSliderCommit = () => {
-    jumpToPercent(sliderPos)
-  }
+  const handleSlider = (e: React.ChangeEvent<HTMLInputElement>) =>
+    setSliderPos(Number(e.target.value))
+
+  const handleSliderCommit = () => jumpToPercent(sliderPos)
 
   const handleDoubleClick = () => setShowNovel(!showNovel)
 
-  // 导入小说
   const handleImport = async () => {
     try {
       const filePath = await openDialog({
@@ -131,7 +144,6 @@ export default function NovelReaderPage({ onBack }: Props) {
         filters: [{ name: '文本文件', extensions: ['txt', 'md', 'text'] }],
       })
       if (!filePath) return
-
       setLoading(true)
       const result = await invoke<{
         success: boolean
@@ -139,29 +151,19 @@ export default function NovelReaderPage({ onBack }: Props) {
         fileSize?: number
         error?: string
       }>('scan_novel_file', { path: filePath })
-
       if (!result?.success || result.fileSize == null) {
         setNotification('读取文件失败: ' + (result?.error || '未知错误'))
         setLoading(false)
         return
       }
-
       const title = filePath.split(/[\\/]/).pop()?.replace(/\.(txt|md|text)$/, '') || '未命名'
-      const meta: NovelMeta = {
-        filePath,
-        title,
-        fileSize: result.fileSize,
-        importedAt: Date.now(),
-      }
+      const meta: NovelMeta = { filePath, title, fileSize: result.fileSize, importedAt: Date.now() }
       localStorage.setItem('adb_novel_meta', JSON.stringify(meta))
       setNovelMeta(meta)
       fileSizeRef.current = result.fileSize
       readEndByteRef.current = Math.min(CHUNK_CHARS, result.fileSize)
       setSliderPos(0)
-
-      if (result.preview) {
-        setCodeLines(generateMixedCode(result.preview))
-      }
+      if (result.preview) setCodeLines(await generateMixedCode(result.preview))
       setShowNovel(true)
       setNotification('已导入「' + title + '」')
       setTimeout(() => setNotification(''), 3000)
@@ -181,46 +183,106 @@ export default function NovelReaderPage({ onBack }: Props) {
     setSliderPos(0)
   }
 
+  // ====== 渲染行 ======
+  const renderLine = (line: string, i: number) => {
+    const isNovelComment = line.startsWith('// ') && !line.startsWith('// ===') &&
+      !line.startsWith('// @') && !line.startsWith('// TODO') &&
+      !line.startsWith('// FIXME')
+    const isChapterHeader = line.includes('═══')
+
+    // 隐藏模式：彻底隐藏注释行
+    if (!showNovel && isNovelComment) return null
+
+    const color = isChapterHeader ? '#ff0'
+      : isNovelComment ? commentColor
+      : line.startsWith('//') ? '#444'
+      : /^(function|class|const|let|var|interface|export|import|async|return|if|for|while|try|catch|throw|new|switch|case|default)\b/.test(line.trimStart()) ? '#c678dd'
+      : /\b(function|class|const|let|var|interface|export|import|async|return|if|else|for|while|throw|new|this|typeof|instanceof|switch|case|default)\b/.test(line) ? '#e5c07b'
+      : '#abb2bf'
+
+    return (
+      <div key={i} style={{ whiteSpace: 'pre', color }}>
+        {line}
+      </div>
+    )
+  }
+
   return (
     <div
       style={{
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        background: '#0a0a0a',
-        color: '#e0e0e0',
-        fontFamily: "'Cascadia Code', 'Consolas', 'Fira Code', monospace",
+        height: '100%', display: 'flex', flexDirection: 'column',
+        background: '#0a0a0a', color: '#e0e0e0',
+        fontFamily: "'Cascadia Code','Consolas','Fira Code',monospace",
         position: 'relative',
       }}
       onDoubleClick={handleDoubleClick}
     >
       {/* 顶栏 */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 12,
-        padding: '8px 16px', background: '#111', borderBottom: '1px solid #1a1a2e',
-        fontSize: 12, userSelect: 'none',
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '6px 14px', background: '#111', borderBottom: '1px solid #1a1a2e',
+        fontSize: 12, userSelect: 'none', flexWrap: 'wrap',
       }}>
-        <button onClick={onBack}
-          style={{ background: 'none', border: '1px solid #333', borderRadius: 4, color: '#888', cursor: 'pointer', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+        <button onClick={onBack} style={btnStyle('#888')}>
           <ArrowLeft size={13} /> 退出
         </button>
-        <span style={{ color: '#0f0', fontWeight: 600, fontSize: 13 }}>
-          <Code2 size={13} style={{ marginRight: 4, verticalAlign: -2 }} />
+        <span style={{ color: '#0f0', fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
+          <Code2 size={13} />
           {novelMeta?.title || 'Code Editor'}
         </span>
         <div style={{ flex: 1 }} />
-        <span style={{ color: showNovel ? '#0f0' : '#600', fontSize: 10, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }} onClick={() => setShowNovel(!showNovel)}>
+
+        {/* 字号选择 */}
+        <div style={{ position: 'relative' }}>
+          <button onClick={() => { setShowFontPicker(!showFontPicker); setShowColorPicker(false) }}
+            style={btnStyle('#aaa')} title="字号">
+            <Baseline size={12} /> {fontSize}px
+          </button>
+          {showFontPicker && (
+            <div style={popupStyle}>
+              {FONT_SIZES.map(s => (
+                <div key={s}
+                  onClick={() => { setFontSize(s); localStorage.setItem('adb_novel_font_size', String(s)); setShowFontPicker(false) }}
+                  style={{ ...popupItemStyle, fontWeight: s === fontSize ? 700 : 400, color: s === fontSize ? '#0f0' : '#aaa' }}>
+                  {s}px
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 注释颜色选择 */}
+        <div style={{ position: 'relative' }}>
+          <button onClick={() => { setShowColorPicker(!showColorPicker); setShowFontPicker(false) }}
+            style={btnStyle(commentColor)} title="注释颜色">
+            <Palette size={12} />
+          </button>
+          {showColorPicker && (
+            <div style={popupStyle}>
+              {COMMENT_COLORS.map(c => (
+                <div key={c.value}
+                  onClick={() => { setCommentColor(c.value); localStorage.setItem('adb_novel_comment_color', c.value); setShowColorPicker(false) }}
+                  style={{ ...popupItemStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 12, height: 12, borderRadius: 2, background: c.value, display: 'inline-block' }} />
+                  {c.label}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 显示/隐藏 */}
+        <button onClick={() => setShowNovel(!showNovel)}
+          style={btnStyle(showNovel ? '#0f0' : '#600')} title={showNovel ? '小说可见' : '小说已隐藏'}>
           {showNovel ? <Eye size={13} /> : <EyeOff size={13} />}
-          {showNovel ? '小说可见' : '小说隐藏'}
-        </span>
-        <button onClick={handleImport}
-          style={{ background: 'none', border: '1px solid #333', borderRadius: 4, color: '#0af', cursor: 'pointer', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
-          <Upload size={13} /> 导入
+        </button>
+
+        <button onClick={handleImport} style={btnStyle('#0af')}>
+          <Upload size={12} /> 导入
         </button>
         {novelMeta && (
-          <button onClick={clearNovel}
-            style={{ background: 'none', border: '1px solid #333', borderRadius: 4, color: '#f55', cursor: 'pointer', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
-            <Trash2 size={13} /> 清除
+          <button onClick={clearNovel} style={btnStyle('#f55')}>
+            <Trash2 size={12} /> 清除
           </button>
         )}
       </div>
@@ -233,98 +295,83 @@ export default function NovelReaderPage({ onBack }: Props) {
 
       {/* 阅读区 */}
       {codeLines.length > 0 ? (
-        <div
-          ref={scrollRef}
-          onScroll={handleScroll}
-          style={{ flex: 1, overflow: 'auto', padding: '16px 20px', fontFamily: "'Cascadia Code','Consolas','Fira Code',monospace", fontSize: 12, lineHeight: '1.7' }}
-        >
+        <div ref={scrollRef} onScroll={handleScroll}
+          style={{
+            flex: 1, overflow: 'auto', padding: '14px 18px',
+            fontFamily: "'Cascadia Code','Consolas','Fira Code',monospace",
+            fontSize, lineHeight: '1.7',
+          }}>
           <div style={{ display: 'flex' }}>
-            <div style={{ paddingRight: 16, textAlign: 'right', color: '#333', userSelect: 'none', flexShrink: 0, minWidth: 40, borderRight: '1px solid #1a1a1a' }}>
-              {codeLines.map((_, i) => <div key={i}>{i + 1}</div>)}
+            <div style={{
+              paddingRight: 14, textAlign: 'right', color: '#333', userSelect: 'none',
+              flexShrink: 0, minWidth: 36, borderRight: '1px solid #1a1a1a', fontSize: fontSize - 1,
+            }}>
+              {codeLines.map((_, i) => (
+                <div key={i}>{i + 1}</div>
+              ))}
             </div>
-            <div style={{ flex: 1, paddingLeft: 16 }}>
-              {codeLines.map((line, i) => {
-                const isNovelComment = showNovel && line.trimStart().startsWith('//')
-                const isChapterHeader = line.includes('═══')
-                return (
-                  <div key={i} style={{
-                    whiteSpace: 'pre',
-                    color: isChapterHeader ? '#ff0' : isNovelComment ? '#0a0' : line.startsWith('//') ? '#444' :
-                      /^(function|class|const|let|var|interface|export|import|async|return|if|for|while|try|catch|throw|new)\b/.test(line) ? '#c678dd' :
-                      /\b(function|class|const|let|var|interface|export|import|async|return|if|else|for|while|throw|new|this|typeof|instanceof)\b/.test(line) ? '#e5c07b' : '#abb2bf',
-                  }}>{line}</div>
-                )
-              })}
+            <div style={{ flex: 1, paddingLeft: 14, minWidth: 0 }}>
+              {codeLines.map((line, i) => renderLine(line, i))}
             </div>
           </div>
-          {/* 底部指示 */}
           {loading && readEndByteRef.current < fileSizeRef.current && (
-            <div style={{ textAlign: 'center', padding: 12, color: '#555', fontSize: 11 }}>加载中...</div>
+            <div style={{ textAlign: 'center', padding: 12, color: '#555', fontSize: fontSize - 1 }}>加载中...</div>
           )}
           {readEndByteRef.current >= fileSizeRef.current && codeLines.length > 0 && (
-            <div style={{ textAlign: 'center', padding: 12, color: '#333', fontSize: 11 }}>— 已到末尾 —</div>
+            <div style={{ textAlign: 'center', padding: 12, color: '#333', fontSize: fontSize - 1 }}>— 完 —</div>
           )}
         </div>
       ) : (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#444', gap: 16 }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#444', gap: 12 }}>
           <BookOpen size={48} style={{ opacity: 0.3 }} />
-          <div style={{ fontSize: 14 }}>暂无内容</div>
-          <div style={{ fontSize: 11, color: '#333' }}>点击「导入」加载小说，伪装成代码注释</div>
+          <div style={{ fontSize: 14 }}>暂无内容，点击导入小说</div>
           <button onClick={handleImport}
             style={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: 6, color: '#0af', cursor: 'pointer', padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-            <Upload size={14} /> 导入小说 (TXT/MD)
+            <Upload size={14} /> 导入 TXT/MD
           </button>
         </div>
       )}
 
-      {/* 底部导航：百分比滑块（用于手动跳转） */}
+      {/* 底部滑块 */}
       {novelMeta && (
-        <div style={{ padding: '6px 16px 8px', background: '#111', borderTop: '1px solid #1a1a2e', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button onClick={() => jumpToPercent(Math.max(0, sliderPos - 5))}
-            style={{ background: 'none', border: '1px solid #333', borderRadius: 3, color: '#888', cursor: 'pointer', padding: '2px 6px', fontSize: 0, display: 'flex', alignItems: 'center' }}>
+        <div style={{ padding: '6px 14px 8px', background: '#111', borderTop: '1px solid #1a1a2e', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button onClick={() => jumpToPercent(Math.max(0, sliderPos - 3))}
+            style={btnStyle('#888')}>
             <ChevronLeft size={12} />
           </button>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={sliderPos}
-            onChange={handleSlider}
-            onMouseUp={handleSliderCommit}
-            onTouchEnd={handleSliderCommit}
+          <input type="range" min={0} max={100} value={sliderPos}
+            onChange={handleSlider} onMouseUp={handleSliderCommit} onTouchEnd={handleSliderCommit}
             style={{
               flex: 1, height: 4, WebkitAppearance: 'none', appearance: 'none',
               background: `linear-gradient(to right, #0f0 0%, #0f0 ${sliderPos}%, #1a1a2e ${sliderPos}%, #1a1a2e 100%)`,
               borderRadius: 2, outline: 'none', cursor: 'pointer',
-            }}
-          />
-          <button onClick={() => jumpToPercent(Math.min(100, sliderPos + 5))}
-            style={{ background: 'none', border: '1px solid #333', borderRadius: 3, color: '#888', cursor: 'pointer', padding: '2px 6px', fontSize: 0, display: 'flex', alignItems: 'center' }}>
+            }} />
+          <button onClick={() => jumpToPercent(Math.min(100, sliderPos + 3))}
+            style={btnStyle('#888')}>
             <ChevronRight size={12} />
           </button>
-          <span style={{ color: '#555', fontSize: 10, minWidth: 40, textAlign: 'center' }}>
-            {sliderPos}%
-          </span>
+          <span style={{ color: '#555', fontSize: 10, minWidth: 36, textAlign: 'center' }}>{sliderPos}%</span>
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: 16, padding: '4px 16px', background: '#111', borderTop: '1px solid #1a1a2e', fontSize: 10, color: '#444', userSelect: 'none' }}>
+      {/* 状态栏 */}
+      <div style={{ display: 'flex', gap: 14, padding: '3px 14px', background: '#111', borderTop: '1px solid #1a1a2e', fontSize: 10, color: '#444', userSelect: 'none' }}>
         <span>{codeLines.length} 行</span>
         {novelMeta && (
           <>
             <span>|</span>
             <span>进度 {sliderPos}%</span>
             <span>|</span>
-            <span style={{ color: showNovel ? '#0a0' : '#600' }}>{showNovel ? '小说可见' : '小说已隐藏'}</span>
+            <span style={{ color: showNovel ? '#0a0' : '#a00' }}>{showNovel ? '小说可见' : '小说已隐藏'}</span>
           </>
         )}
-        <span style={{ marginLeft: 'auto' }}>双击切换 | 滚到底自动续读 | 拖滑块跳转</span>
+        <span style={{ marginLeft: 'auto' }}>双击切换 | 滑到底自动续读 | 拖滑块跳转</span>
       </div>
     </div>
   )
 }
 
-// ====== 混合代码生成 ======
+// ====== 混合代码生成（无空白填充） ======
 const CODE_SNIPPETS = [
   'function initializeRuntime() {',
   '  const config = loadConfig("/etc/app/config.json");',
@@ -336,8 +383,6 @@ const CODE_SNIPPETS = [
   '',
   'class DataProcessor {',
   '  private cache: Map<string, any> = new Map();',
-  '  private maxSize: number = 1024 * 1024 * 50;',
-  '',
   '  async process(input: StreamData): Promise<ResultSet> {',
   '    const hash = crypto.createHash("sha256").update(input.raw).digest("hex");',
   '    if (this.cache.has(hash)) return this.cache.get(hash);',
@@ -345,13 +390,8 @@ const CODE_SNIPPETS = [
   '    const result = await this.pipeline.execute(normalized);',
   '    return this.cacheAndReturn(hash, result);',
   '  }',
-  '',
   '  private normalize(data: StreamData): NormalizedData {',
-  '    return {',
-  '      id: data.id ?? nanoid(),',
-  '      timestamp: data.ts || Date.now(),',
-  '      payload: Buffer.from(data.raw).toString("base64"),',
-  '    };',
+  '    return { id: data.id ?? nanoid(), timestamp: data.ts || Date.now(), payload: Buffer.from(data.raw).toString("base64") };',
   '  }',
   '}',
   '',
@@ -367,14 +407,12 @@ const CODE_SNIPPETS = [
   '  try {',
   '    const body = await parseBody(req);',
   '    const validated = schema.safeParse(body);',
-  '    if (!validated.success) {',
-  '      return { status: 400, body: { error: validated.error.flatten() } };',
-  '    }',
+  '    if (!validated.success) return { status: 400, body: { error: validated.error.flatten() } };',
   '    const result = await processor.process(validated.data);',
   '    metrics.record("request.latency", performance.now() - start);',
   '    return { status: 200, body: result };',
   '  } catch (err) {',
-  '    logger.error("Request failed", { error: err.message, stack: err.stack });',
+  '    logger.error("Request failed", { error: err.message });',
   '    return { status: 500, body: { error: "Internal Server Error" } };',
   '  }',
   '}',
@@ -382,19 +420,10 @@ const CODE_SNIPPETS = [
   'class LRUCache<K, V> {',
   '  private capacity: number;',
   '  private map: Map<K, ListNode<CacheEntry<V>>>;',
-  '',
-  '  constructor(capacity: number = 1000) {',
-  '    this.capacity = capacity;',
-  '    this.map = new Map();',
-  '  }',
-  '',
+  '  constructor(capacity: number = 1000) { this.capacity = capacity; this.map = new Map(); }',
   '  get(key: K): V | undefined {',
   '    const node = this.map.get(key);',
-  '    if (!node) return undefined;',
-  '    if (Date.now() > node.value.expiresAt) {',
-  '      this.delete(key);',
-  '      return undefined;',
-  '    }',
+  '    if (!node || Date.now() > node.value.expiresAt) return undefined;',
   '    this.moveToFront(node);',
   '    node.value.accessCount++;',
   '    return node.value.value;',
@@ -402,35 +431,52 @@ const CODE_SNIPPETS = [
   '}',
 ]
 
-function generateMixedCode(novelContent: string): string[] {
-  const novelLines = novelContent.split('\n').filter(l => l.trim())
-  const totalNovelLines = novelLines.length
-  const targetCodeLines = totalNovelLines * 4
-  const result: string[] = []
-
-  result.push('/**')
-  result.push(' * ═══════════════════════════════════════')
-  result.push(' * 小说阅读器')
-  result.push(' * ═══════════════════════════════════════')
-  result.push(' */')
-  result.push('')
-
+// 单步 mix 20 条代码 + 5 条小说，循环直到小说行用完即止（不留空白填充）
+function *mixGenerator(novelLines: string[]): Generator<string> {
+  yield '/**'
+  yield ' * ═══════════════════════════════════════'
+  yield ' * 小说阅读器'
+  yield ' * ═══════════════════════════════════════'
+  yield ' */'
+  yield ''
   let codeIdx = 0
   let novelIdx = 0
+  while (novelIdx < novelLines.length) {
+    // 4 行代码
+    for (let k = 0; k < 4; k++) {
+      if (codeIdx >= CODE_SNIPPETS.length) codeIdx = 0
+      yield CODE_SNIPPETS[codeIdx++]
+    }
+    // 1 行小说注释
+    const l = novelLines[novelIdx].trim()
+    if (l) yield '// ' + l
+    novelIdx++
+  }
+}
 
-  while (novelIdx < novelLines.length || codeIdx < targetCodeLines) {
-    const codeBlock: string[] = []
-    while (codeBlock.length < 4 && codeIdx < targetCodeLines) {
-      codeBlock.push(CODE_SNIPPETS[codeIdx % CODE_SNIPPETS.length])
-      codeIdx++
-    }
-    result.push(...codeBlock)
-    if (novelIdx < novelLines.length) {
-      const line = novelLines[novelIdx]
-      if (line.trim()) result.push('// ' + line)
-      novelIdx++
-    }
-    if (novelIdx >= novelLines.length && codeIdx >= targetCodeLines) break
+async function generateMixedCode(novelContent: string): Promise<string[]> {
+  const novelLines = novelContent.split('\n').filter(l => l.trim())
+  const result: string[] = []
+  for (const line of mixGenerator(novelLines)) {
+    result.push(line)
   }
   return result
+}
+
+// ====== 样式工具 ======
+const btnStyle = (color: string): React.CSSProperties => ({
+  background: 'none', border: '1px solid #333', borderRadius: 3,
+  color, cursor: 'pointer', padding: '3px 8px',
+  display: 'flex', alignItems: 'center', gap: 4, fontSize: 11,
+})
+
+const popupStyle: React.CSSProperties = {
+  position: 'absolute', top: 26, right: 0, background: '#1a1a2e',
+  border: '1px solid #333', borderRadius: 4, padding: '4px 0',
+  zIndex: 200, minWidth: 70,
+}
+
+const popupItemStyle: React.CSSProperties = {
+  padding: '4px 12px', cursor: 'pointer', fontSize: 11,
+  color: '#aaa', whiteSpace: 'nowrap',
 }
