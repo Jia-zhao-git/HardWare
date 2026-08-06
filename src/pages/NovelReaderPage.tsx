@@ -39,8 +39,10 @@ export default function NovelReaderPage({ onBack }: Props) {
   const loadedRef = useRef(false)
   const autoLoadingRef = useRef(false)
   const readEndByteRef = useRef(0)
+  const readStartByteRef = useRef(0)
   const fileSizeRef = useRef(0)
   const pendingScrollRef = useRef(0)
+  const prependingRef = useRef(false)
 
   // 自定义：注释颜色 + 字号
   const [commentColor, setCommentColor] = useState('#0a0')
@@ -70,11 +72,11 @@ export default function NovelReaderPage({ onBack }: Props) {
     if (s) setFontSize(Number(s))
   }, [])
 
-  // 退出/卸载时保存阅读字节位置 + 滚动位置
+  // 退出/卸载时保存阅读起始位置 + 滚动偏移
   useEffect(() => {
     return () => {
-      if (novelMeta && readEndByteRef.current > 0) {
-        localStorage.setItem('adb_novel_last_byte', String(readEndByteRef.current))
+      if (novelMeta && readStartByteRef.current > 0) {
+        localStorage.setItem('adb_novel_last_byte', String(readStartByteRef.current))
         localStorage.setItem('adb_novel_last_scroll', String(scrollRef.current?.scrollTop || 0))
       }
     }
@@ -97,6 +99,7 @@ export default function NovelReaderPage({ onBack }: Props) {
       const endByte = startByte + readLen
       const content = await readFileRange(meta.filePath, startByte, endByte)
       readEndByteRef.current = endByte
+      readStartByteRef.current = startByte
       setCodeLines(await generateMixedCode(content))
       scrollRef.current?.scrollTo(0, 0)
     } catch (e) {
@@ -114,6 +117,7 @@ export default function NovelReaderPage({ onBack }: Props) {
       const endByte = clampedStart + readLen
       const content = await readFileRange(meta.filePath, clampedStart, endByte)
       readEndByteRef.current = endByte
+      readStartByteRef.current = clampedStart
       const savedScroll = Number(localStorage.getItem('adb_novel_last_scroll') || '0')
       if (savedScroll > 0) pendingScrollRef.current = savedScroll
       setCodeLines(await generateMixedCode(content))
@@ -145,14 +149,50 @@ export default function NovelReaderPage({ onBack }: Props) {
     autoLoadingRef.current = false
   }, [novelMeta])
 
-  // 滚动到底部触发加载（阈值 200px，避免空白区域不够触发）
+  // 向上滚动时预加载前面的内容
+  const prependPrevChunk = useCallback(async () => {
+    if (prependingRef.current || autoLoadingRef.current) return
+    prependingRef.current = true
+    const startByte = readStartByteRef.current
+    if (startByte <= 0) {
+      prependingRef.current = false
+      return
+    }
+    const prevEndByte = startByte
+    const prevStartByte = Math.max(0, startByte - CHUNK_CHARS)
+    try {
+      const oldScrollHeight = scrollRef.current?.scrollHeight || 0
+      const content = await readFileRange(novelMeta!.filePath, prevStartByte, prevEndByte)
+      readStartByteRef.current = prevStartByte
+      const mixed = await generateMixedCode(content)
+      setCodeLines(prev => {
+        // 插入新内容后补偿滚动位置
+        requestAnimationFrame(() => {
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight - oldScrollHeight
+          }
+        })
+        return [...mixed, ...prev]
+      })
+    } catch (e) {
+      setNotification('向上加载失败: ' + String(e))
+    }
+    prependingRef.current = false
+  }, [novelMeta])
+
+  // 滚动到底部触发加载 / 滚动到顶部加载之前内容
   const handleScroll = useCallback(() => {
-    if (loading || readEndByteRef.current >= fileSizeRef.current) return
-    const el = scrollRef.current
-    if (!el) return
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200
-    if (nearBottom) appendNextChunk()
-  }, [loading, appendNextChunk])
+    if (!loading && readEndByteRef.current < fileSizeRef.current) {
+      const el = scrollRef.current
+      if (!el) return
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200
+      if (nearBottom) appendNextChunk()
+    }
+    // 向上滚动接近顶部时预加载前面内容
+    if (scrollRef.current && scrollRef.current.scrollTop < 100 && readStartByteRef.current > 0) {
+      prependPrevChunk()
+    }
+  }, [loading, appendNextChunk, prependPrevChunk])
 
   const jumpToPercent = (pct: number) => {
     if (!novelMeta) return
@@ -207,6 +247,7 @@ export default function NovelReaderPage({ onBack }: Props) {
       setNovelMeta(meta)
       fileSizeRef.current = result.fileSize
       readEndByteRef.current = result.previewBytes ?? Math.min(CHUNK_CHARS, result.fileSize)
+      readStartByteRef.current = 0
       setSliderPos(0)
       if (result.preview) setCodeLines(await generateMixedCode(result.preview))
       setShowNovel(true)
@@ -226,6 +267,7 @@ export default function NovelReaderPage({ onBack }: Props) {
     setNovelMeta(null)
     setCodeLines([])
     readEndByteRef.current = 0
+    readStartByteRef.current = 0
     fileSizeRef.current = 0
     setSliderPos(0)
   }
