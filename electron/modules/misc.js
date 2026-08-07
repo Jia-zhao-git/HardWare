@@ -217,18 +217,30 @@ module.exports = {
 
 async function generateStabilityReport(event, { sn }) {
     const { execFile } = require('child_process');
+    const scriptsDir = path.join(__dirname, '..', '..', 'scripts');
+    const htmlScript = path.join(scriptsDir, 'stability_batch.py');
+    const pngScript = path.join(scriptsDir, 'stability_png.py');
+    const snDir = path.join('D:\\HardWare\\Stableness', sn);
+
     try {
-        const scriptPath = 'D:\\ADB-TOOLS-V1.0\\.cowork-temp\\stability_batch.py';
-        const result = await new Promise((resolve, reject) => {
-            execFile('python3', [scriptPath], {
-                maxBuffer: 10 * 1024 * 1024,
-                timeout: 120000,
+        // Generate HTML
+        await new Promise((resolve, reject) => {
+            execFile('python3', [htmlScript], {
+                maxBuffer: 10 * 1024 * 1024, timeout: 120000,
             }, (error, stdout, stderr) => {
                 if (error) reject(error);
                 else resolve(stdout);
             });
         });
-        const snDir = path.join('D:\\HardWare\\Stableness', sn);
+        // Generate PNG
+        await new Promise((resolve, reject) => {
+            execFile('python3', [pngScript], {
+                maxBuffer: 10 * 1024 * 1024, timeout: 120000,
+            }, (error, stdout, stderr) => {
+                if (error) reject(error);
+                else resolve(stdout);
+            });
+        });
         const htmlPath = path.join(snDir, 'stability_report.html');
         const pngPath = path.join(snDir, 'stability_report.png');
         return {
