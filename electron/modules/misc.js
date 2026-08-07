@@ -241,8 +241,8 @@ async function generateStabilityReport(event, { sn }) {
                 else resolve(stdout);
             });
         });
-        const htmlPath = path.join(snDir, 'stability_report.html');
-        const pngPath = path.join(snDir, 'stability_report.png');
+        const htmlPath = path.join(snDir, sn + '.html');
+        const pngPath = path.join(snDir, sn + '.png');
         return {
             success: true,
             html: fs.existsSync(htmlPath) ? htmlPath : null,

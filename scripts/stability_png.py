@@ -288,7 +288,7 @@ def gen_png(sn, base):
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=8)
 
     plt.tight_layout(rect=[0, 0.01, 1, 0.97])
-    out = os.path.join(os.path.dirname(base), 'stability_report.png')
+    out = os.path.join(os.path.dirname(base), '.png')
     fig.savefig(out, dpi=130, bbox_inches='tight', facecolor=BG, edgecolor='none')
     plt.close(fig)
     size_kb = os.path.getsize(out) // 1024
