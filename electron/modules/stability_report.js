@@ -19,7 +19,7 @@ function parseKvLog(filePath) {
             const dt = new Date(
                 parseInt(parts[0].slice(0,4)), parseInt(parts[0].slice(4,6))-1,
                 parseInt(parts[0].slice(6,8)), parseInt(parts[0].slice(9,11)),
-                parseInt(parts[0].slice(11,13)), parseInt(parts[0].slice(13,15))
+                parseInt(parts[0].slice(12,14)), parseInt(parts[0].slice(15,17))
             );
             const vals = { _ts: dt.toISOString() };
             for (let i = 1; i < parts.length - 1; i += 2) {
@@ -44,7 +44,7 @@ function parseMemLog(filePath) {
             const dt = new Date(
                 parseInt(parts[0].slice(0,4)), parseInt(parts[0].slice(4,6))-1,
                 parseInt(parts[0].slice(6,8)), parseInt(parts[0].slice(9,11)),
-                parseInt(parts[0].slice(11,13)), parseInt(parts[0].slice(13,15))
+                parseInt(parts[0].slice(12,14)), parseInt(parts[0].slice(15,17))
             );
             const vals = { _ts: dt.toISOString() };
             vals._pid = parseInt(parts[2]) || 0;

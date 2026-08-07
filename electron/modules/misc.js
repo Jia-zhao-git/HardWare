@@ -39,14 +39,18 @@ function startStbServer() {
                     .filter(d => d.isDirectory())
                     .sort().reverse();
                 for (const d of dirs) {
-                    const has_html = fs.existsSync(path.join(STB_ROOT, d.name, d.name + '.html'));
-                    const has_png = fs.existsSync(path.join(STB_ROOT, d.name, d.name + '.png'));
-                    if (!has_html && !has_png) continue;
-                    html += `<div class="item">
-                        <a href="/${d.name}/${d.name}.html">${d.name}</a>
-                        <div class="meta">`;
-                    if (has_html) html += `<a href="/${d.name}/${d.name}.html" style="color:#5794f2;font-size:11px">HTML</a> `;
-                    if (has_png) html += `<a href="/${d.name}/${d.name}.png" style="color:#73bf69;font-size:11px">PNG</a>`;
+                    // List all HTML/PNG files in the directory
+                    const files = fs.readdirSync(path.join(STB_ROOT, d.name), { withFileTypes: true })
+                        .filter(f => f.isFile() && (f.name.endsWith('.html') || f.name.endsWith('.png')))
+                        .sort().reverse();
+                    if (!files.length) continue;
+                    const htmlFiles = files.filter(f => f.name.endsWith('.html'));
+                    const pngFiles = files.filter(f => f.name.endsWith('.png'));
+                    html += `<div class="item"><strong style="color:#e0a84b">${d.name}</strong><div class="meta">`;
+                    for (const hf of htmlFiles.slice(0, 5)) {
+                        html += `<a href="/${d.name}/${hf.name}" style="color:#5794f2;font-size:11px;display:block">${hf.name}</a>`;
+                    }
+                    if (htmlFiles.length > 5) html += `<span style="color:#555;font-size:10px">... +${htmlFiles.length-5} more</span>`;
                     html += '</div></div>';
                 }
             } catch(e) { html += '<p>No reports yet</p>'; }
@@ -305,19 +309,24 @@ async function generateStabilityReport(event, { sn }) {
     try {
         console.log('[STB] Generating report for', sn);
         
+        // Timestamp for unique filenames
+        const now = new Date();
+        const ts = `${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+        const fileBase = `${sn}_${ts}`;
+        
         // Generate HTML
         const html = stbReport.generateHTML(sn, grafanaDir);
         if (!html) return { success: false, error: 'No data found' };
-        const htmlPath = path.join(snDir, sn + '.html');
+        const htmlPath = path.join(snDir, fileBase + '.html');
         fs.writeFileSync(htmlPath, html, 'utf-8');
         console.log('[STB] HTML done:', htmlPath);
         
         // Generate PNG via Electron capture
-        const pngPath = path.join(snDir, sn + '.png');
+        const pngPath = path.join(snDir, fileBase + '.png');
         const pngOk = await stbReport.generatePNG(htmlPath, pngPath);
         console.log('[STB] PNG done:', pngOk ? pngPath : 'FAILED');
         
-        const webUrl = stbPort ? `${getStbUrl()}/${sn}/${sn}.html` : null;
+        const webUrl = stbPort ? `${getStbUrl()}/${sn}/${fileBase}.html` : null;
         return {
             success: true,
             html: htmlPath,
