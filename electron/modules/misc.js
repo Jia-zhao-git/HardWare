@@ -298,17 +298,23 @@ async function delete_script_file(event, { filename }) {
 
 async function generateStabilityReport(event, { sn }) {
     const { execSync } = require('child_process');
+    const pythonPath = path.join(process.env.LOCALAPPDATA || 'C:\\Users\\zhaojia06\\AppData\\Roaming',
+        'LobsterAI', 'runtimes', 'python-win', 'python3.exe');
     const baseDir = 'D:\\HardWare\\Stableness';
     const scriptsDir = 'D:\\ADB-TOOLS-V1.0\\scripts';
     const snDir = path.join(baseDir, sn);
     
     try {
         console.log('[STB] Generating report for', sn);
+        console.log('[STB] Python:', pythonPath);
         // Generate PNG
-        execSync(`python3 "${scriptsDir}\\stability_png.py"`, { timeout: 120000, maxBuffer: 10*1024*1024 });
+        const pngCmd = `"${pythonPath}" "${scriptsDir}\\stability_png.py"`;
+        console.log('[STB] Running:', pngCmd);
+        execSync(pngCmd, { timeout: 120000, maxBuffer: 10*1024*1024, stdio: 'pipe' });
         console.log('[STB] PNG done');
         // Generate HTML
-        execSync(`python3 "${scriptsDir}\\stability_batch.py"`, { timeout: 120000, maxBuffer: 10*1024*1024 });
+        const htmlCmd = `"${pythonPath}" "${scriptsDir}\\stability_batch.py"`;
+        execSync(htmlCmd, { timeout: 120000, maxBuffer: 10*1024*1024, stdio: 'pipe' });
         console.log('[STB] HTML done');
         
         const htmlPath = path.join(snDir, sn + '.html');
@@ -323,7 +329,9 @@ async function generateStabilityReport(event, { sn }) {
         };
     } catch (e) {
         console.error('[STB] Error:', e.message);
-        return { success: false, error: e.message };
+        console.error('[STB] Stderr:', e.stderr ? e.stderr.toString() : 'none');
+        console.error('[STB] Stdout:', e.stdout ? e.stdout.toString() : 'none');
+        return { success: false, error: e.stderr ? e.stderr.toString().slice(0, 500) : e.message };
     }
 }
 
