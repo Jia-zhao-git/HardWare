@@ -298,7 +298,7 @@ async function delete_script_file(event, { filename }) {
 
 async function generateStabilityReport(event, { sn }) {
     const { execSync } = require('child_process');
-    const pythonPath = path.join(process.env.LOCALAPPDATA || 'C:\\Users\\zhaojia06\\AppData\\Roaming',
+    const pythonPath = path.join(process.env.APPDATA || 'C:\\Users\\zhaojia06\\AppData\\Roaming',
         'LobsterAI', 'runtimes', 'python-win', 'python3.exe');
     const baseDir = 'D:\\HardWare\\Stableness';
     const scriptsDir = 'D:\\ADB-TOOLS-V1.0\\scripts';
