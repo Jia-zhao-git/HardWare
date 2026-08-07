@@ -252,6 +252,7 @@ function registerMiscHandlers() {
     if (misc.write_script_file) ipcMain.handle('write_script_file', misc.write_script_file);
     if (misc.delete_script_file) ipcMain.handle('delete_script_file', misc.delete_script_file);
     if (misc.generateStabilityReport) ipcMain.handle('generate_stability_report', misc.generateStabilityReport);
+    if (misc.generateStabilityReport) ipcMain.handle('run_stability_report', misc.generateStabilityReport);
     if (misc.startStbServer) ipcMain.handle('start_stb_server', misc.startStbServer);
     if (misc.stopStbServer) ipcMain.handle('stop_stb_server', misc.stopStbServer);
     if (misc.getStbPort) ipcMain.handle('get_stb_port', misc.getStbPort);

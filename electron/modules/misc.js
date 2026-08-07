@@ -297,31 +297,20 @@ async function delete_script_file(event, { filename }) {
 }
 
 async function generateStabilityReport(event, { sn }) {
-    const { execFile } = require('child_process');
-    const scriptsDir = path.join(__dirname, '..', '..', 'scripts');
-    const htmlScript = path.join(scriptsDir, 'stability_batch.py');
-    const pngScript = path.join(scriptsDir, 'stability_png.py');
-    const snDir = path.join('D:\\HardWare\\Stableness', sn);
-
+    const { execSync } = require('child_process');
+    const baseDir = 'D:\\HardWare\\Stableness';
+    const scriptsDir = 'D:\\ADB-TOOLS-V1.0\\scripts';
+    const snDir = path.join(baseDir, sn);
+    
     try {
-        // Generate HTML
-        await new Promise((resolve, reject) => {
-            execFile('python3', [htmlScript], {
-                maxBuffer: 10 * 1024 * 1024, timeout: 120000,
-            }, (error, stdout, stderr) => {
-                if (error) reject(error);
-                else resolve(stdout);
-            });
-        });
+        console.log('[STB] Generating report for', sn);
         // Generate PNG
-        await new Promise((resolve, reject) => {
-            execFile('python3', [pngScript], {
-                maxBuffer: 10 * 1024 * 1024, timeout: 120000,
-            }, (error, stdout, stderr) => {
-                if (error) reject(error);
-                else resolve(stdout);
-            });
-        });
+        execSync(`python3 "${scriptsDir}\\stability_png.py"`, { timeout: 120000, maxBuffer: 10*1024*1024 });
+        console.log('[STB] PNG done');
+        // Generate HTML
+        execSync(`python3 "${scriptsDir}\\stability_batch.py"`, { timeout: 120000, maxBuffer: 10*1024*1024 });
+        console.log('[STB] HTML done');
+        
         const htmlPath = path.join(snDir, sn + '.html');
         const pngPath = path.join(snDir, sn + '.png');
         const webUrl = stbPort ? `${getStbUrl()}/${sn}/${sn}.html` : null;
@@ -333,6 +322,7 @@ async function generateStabilityReport(event, { sn }) {
             stbUrl: getStbUrl(),
         };
     } catch (e) {
+        console.error('[STB] Error:', e.message);
         return { success: false, error: e.message };
     }
 }
