@@ -296,21 +296,6 @@ async function delete_script_file(event, { filename }) {
     }
 }
 
-module.exports = {
-    collect_battery_log,
-    calculateDuration,
-    set_scripts_dir,
-    list_scripts,
-    read_script_file,
-    write_script_file,
-    delete_script_file,
-    generateStabilityReport,
-    startStbServer,
-    stopStbServer,
-    getStbPort,
-    getStbUrl,
-};
-
 async function generateStabilityReport(event, { sn }) {
     const { execFile } = require('child_process');
     const scriptsDir = path.join(__dirname, '..', '..', 'scripts');
@@ -351,3 +336,18 @@ async function generateStabilityReport(event, { sn }) {
         return { success: false, error: e.message };
     }
 }
+
+module.exports = {
+    collect_battery_log,
+    calculateDuration,
+    set_scripts_dir,
+    list_scripts,
+    read_script_file,
+    write_script_file,
+    delete_script_file,
+    generateStabilityReport,
+    startStbServer,
+    stopStbServer,
+    getStbPort,
+    getStbUrl,
+};
