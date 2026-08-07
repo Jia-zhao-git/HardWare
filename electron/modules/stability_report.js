@@ -112,11 +112,17 @@ function generateHTML(sn, grafanaDir) {
 
     const dataStr = JSON.stringify(D);
 
-    // PID lines for info box
+    // PID lines for info box - crashed ones in red
     const pidLines = [];
     for (const [k,v] of Object.entries(pids)) {
-        if (v.stable) pidLines.push(`${k}: PID=${v.first} (stable)`);
-        else for (const c of v.changes) pidLines.push(`${k}: PID ${c.old}->${c.pid} @${c.elapsed} (${c.pid===0?'DIED':'CRASH'})`);
+        if (v.stable) {
+            pidLines.push(`<span style="color:#2e7d32">${k}: PID=${v.first} (stable)</span>`);
+        } else {
+            for (const c of v.changes) {
+                const label = c.pid === 0 ? 'DIED' : 'CRASH';
+                pidLines.push(`<span style="color:#c62828;font-weight:700">${k}: PID ${c.old}->${c.pid} @${c.elapsed} (${label})</span>`);
+            }
+        }
     }
 
     return `<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8"><title>${sn}</title>
