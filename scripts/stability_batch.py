@@ -1,4 +1,4 @@
-import json, os, sys
+﻿import json, os, sys
 from datetime import datetime
 
 def parse_kv_log(path):
@@ -125,7 +125,7 @@ def gen_html(sn, base):
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>稳定�?· {sn}</title>
+<title>稳定性 · {sn}</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
@@ -144,7 +144,7 @@ body{{background:#111;color:#ccc;font-family:"Microsoft YaHei",sans-serif;font-s
 </head>
 <body>
 <div class="ctrl">
-  <span style="color:#e0a84b;font-weight:600;font-size:13px">📊 Y15-3 稳定�?/span>
+  <span style="color:#e0a84b;font-weight:600;font-size:13px">📊 Y15-3 稳定性</span>
   <span style="color:#666">SN: {sn} &nbsp;|&nbsp; {t_start} ~ {t_end} &nbsp;|&nbsp; {n_pts:,} 采样</span>
   <div style="margin-left:auto;display:flex;gap:6px">
     <button onclick="zoomAll(0,100)">全程</button>
@@ -154,19 +154,19 @@ body{{background:#111;color:#ccc;font-family:"Microsoft YaHei",sans-serif;font-s
   </div>
 </div>
 <div class="page">
-<div class="sec-title" onclick="toggle('s_bat')">�?电池</div>
+<div class="sec-title" onclick="toggle('s_bat')">▼ 电池</div>
 <div id="s_bat"><div class="row">
-  <div class="panel"><div class="panel-title">电池百分�?/ 电流 / 电压</div><div id="c_bat" class="chart"></div></div>
+  <div class="panel"><div class="panel-title">电池百分比 / 电流 / 电压</div><div id="c_bat" class="chart"></div></div>
   <div class="panel"><div class="panel-title">温度</div><div id="c_temp" class="chart"></div></div>
 </div></div>
 
-<div class="sec-title" onclick="toggle('s_sys')">�?系统</div>
+<div class="sec-title" onclick="toggle('s_sys')">▼ 系统</div>
 <div id="s_sys"><div class="row">
   <div class="panel"><div class="panel-title">CPU (%)</div><div id="c_cpu" class="chart tall"></div></div>
   <div class="panel"><div class="panel-title">内存 (MB)</div><div id="c_mem" class="chart tall"></div></div>
 </div></div>
 
-<div class="sec-title" onclick="toggle('s_app')">�?App 进程内存</div>
+<div class="sec-title" onclick="toggle('s_app')">▼ App 进程内存</div>
 <div id="s_app">
 <div class="row">
   <div class="panel"><div class="panel-title">miniapp (KB)</div><div id="c_miniapp" class="chart tall"></div></div>
