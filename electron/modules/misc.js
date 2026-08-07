@@ -297,41 +297,37 @@ async function delete_script_file(event, { filename }) {
 }
 
 async function generateStabilityReport(event, { sn }) {
-    const { execSync } = require('child_process');
-    const pythonPath = path.join(process.env.APPDATA || 'C:\\Users\\zhaojia06\\AppData\\Roaming',
-        'LobsterAI', 'runtimes', 'python-win', 'python3.exe');
+    const stbReport = require('./stability_report');
     const baseDir = 'D:\\HardWare\\Stableness';
-    const scriptsDir = 'D:\\ADB-TOOLS-V1.0\\scripts';
+    const grafanaDir = path.join(baseDir, sn, 'grafana');
     const snDir = path.join(baseDir, sn);
     
     try {
         console.log('[STB] Generating report for', sn);
-        console.log('[STB] Python:', pythonPath);
-        // Generate PNG
-        const pngCmd = `"${pythonPath}" "${scriptsDir}\\stability_png.py"`;
-        console.log('[STB] Running:', pngCmd);
-        execSync(pngCmd, { timeout: 120000, maxBuffer: 10*1024*1024, stdio: 'pipe' });
-        console.log('[STB] PNG done');
-        // Generate HTML
-        const htmlCmd = `"${pythonPath}" "${scriptsDir}\\stability_batch.py"`;
-        execSync(htmlCmd, { timeout: 120000, maxBuffer: 10*1024*1024, stdio: 'pipe' });
-        console.log('[STB] HTML done');
         
+        // Generate HTML
+        const html = stbReport.generateHTML(sn, grafanaDir);
+        if (!html) return { success: false, error: 'No data found' };
         const htmlPath = path.join(snDir, sn + '.html');
+        fs.writeFileSync(htmlPath, html, 'utf-8');
+        console.log('[STB] HTML done:', htmlPath);
+        
+        // Generate PNG via Electron capture
         const pngPath = path.join(snDir, sn + '.png');
+        const pngOk = await stbReport.generatePNG(htmlPath, pngPath);
+        console.log('[STB] PNG done:', pngOk ? pngPath : 'FAILED');
+        
         const webUrl = stbPort ? `${getStbUrl()}/${sn}/${sn}.html` : null;
         return {
             success: true,
-            html: fs.existsSync(htmlPath) ? htmlPath : null,
-            png: fs.existsSync(pngPath) ? pngPath : null,
+            html: htmlPath,
+            png: pngOk ? pngPath : null,
             web: webUrl,
             stbUrl: getStbUrl(),
         };
     } catch (e) {
         console.error('[STB] Error:', e.message);
-        console.error('[STB] Stderr:', e.stderr ? e.stderr.toString() : 'none');
-        console.error('[STB] Stdout:', e.stdout ? e.stdout.toString() : 'none');
-        return { success: false, error: e.stderr ? e.stderr.toString().slice(0, 500) : e.message };
+        return { success: false, error: e.message };
     }
 }
 
