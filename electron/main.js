@@ -238,7 +238,7 @@ function registerMiscHandlers() {
             if (!fs.existsSync(normalizedPath)) {
                 fs.mkdirSync(normalizedPath, { recursive: true });
             }
-            // 使用 explorer 直接打开目录，最可靠的方�?            const { exec } = require('child_process');
+            const { exec } = require("child_process");
             exec(`explorer "${normalizedPath}"`);
             return { success: true };
         } catch (e) {
