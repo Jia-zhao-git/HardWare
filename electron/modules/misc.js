@@ -2,7 +2,99 @@
 
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const { runAdb, runAdbShell } = require('./adb');
+
+// ---- Stability HTTP server ----
+let stbServer = null;
+let stbPort = 0;
+const STB_ROOT = 'D:\\HardWare\\Stableness';
+
+const MIME = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.json': 'application/json; charset=utf-8',
+};
+
+function startStbServer() {
+    if (stbServer) return stbPort;
+    stbServer = http.createServer((req, res) => {
+        let urlPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+        if (urlPath === '/' || urlPath === '/index.html') {
+            // Generate directory listing
+            let html = '<html><head><meta charset="utf-8"><title>Stability Reports</title>'
+                + '<style>body{font-family:Microsoft YaHei;background:#111;color:#ccc;padding:24px}'
+                + 'h1{color:#e0a84b;font-size:16px}'
+                + '.card{display:flex;gap:24px;flex-wrap:wrap;margin-top:16px}'
+                + '.item{background:#181818;border:1px solid #252525;border-radius:8px;padding:16px;width:300px}'
+                + '.item a{color:#e0a84b;text-decoration:none;font-size:14px;font-weight:600}'
+                + '.item a:hover{text-decoration:underline}'
+                + '.item .meta{font-size:11px;color:#555;margin-top:6px}</style></head><body>'
+                + '<h1>Y15-3 Stability Reports</h1><div class="card">';
+            try {
+                const dirs = fs.readdirSync(STB_ROOT, { withFileTypes: true })
+                    .filter(d => d.isDirectory())
+                    .sort().reverse();
+                for (const d of dirs) {
+                    const has_html = fs.existsSync(path.join(STB_ROOT, d.name, d.name + '.html'));
+                    const has_png = fs.existsSync(path.join(STB_ROOT, d.name, d.name + '.png'));
+                    if (!has_html && !has_png) continue;
+                    html += `<div class="item">
+                        <a href="/${d.name}/${d.name}.html">${d.name}</a>
+                        <div class="meta">`;
+                    if (has_html) html += `<a href="/${d.name}/${d.name}.html" style="color:#5794f2;font-size:11px">HTML</a> `;
+                    if (has_png) html += `<a href="/${d.name}/${d.name}.png" style="color:#73bf69;font-size:11px">PNG</a>`;
+                    html += '</div></div>';
+                }
+            } catch(e) { html += '<p>No reports yet</p>'; }
+            html += '</div></body></html>';
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(html);
+            return;
+        }
+        const filePath = path.join(STB_ROOT, urlPath);
+        if (!filePath.startsWith(STB_ROOT + path.sep) && filePath !== STB_ROOT) {
+            res.writeHead(403); res.end('Forbidden'); return;
+        }
+        try {
+            const ext = path.extname(filePath);
+            const data = fs.readFileSync(filePath);
+            res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+            res.end(data);
+        } catch(e) {
+            res.writeHead(404); res.end('Not Found');
+        }
+    });
+    return new Promise((resolve) => {
+        stbServer.listen(0, '0.0.0.0', () => {
+            stbPort = stbServer.address().port;
+            resolve(stbPort);
+        });
+    });
+}
+
+function stopStbServer() {
+    if (stbServer) { stbServer.close(); stbServer = null; stbPort = 0; }
+}
+
+function getStbPort() { return stbPort; }
+
+function getStbUrl() {
+    if (!stbPort) return null;
+    const os = require('os');
+    const ifaces = os.networkInterfaces();
+    for (const name of Object.keys(ifaces)) {
+        for (const iface of ifaces[name]) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                return `http://${iface.address}:${stbPort}`;
+            }
+        }
+    }
+    return `http://localhost:${stbPort}`;
+}
 
 // ---- Duration calculation helpers ----
 function findLogFiles(dir) {
@@ -213,6 +305,10 @@ module.exports = {
     write_script_file,
     delete_script_file,
     generateStabilityReport,
+    startStbServer,
+    stopStbServer,
+    getStbPort,
+    getStbUrl,
 };
 
 async function generateStabilityReport(event, { sn }) {
@@ -243,10 +339,13 @@ async function generateStabilityReport(event, { sn }) {
         });
         const htmlPath = path.join(snDir, sn + '.html');
         const pngPath = path.join(snDir, sn + '.png');
+        const webUrl = stbPort ? `${getStbUrl()}/${sn}/${sn}.html` : null;
         return {
             success: true,
             html: fs.existsSync(htmlPath) ? htmlPath : null,
             png: fs.existsSync(pngPath) ? pngPath : null,
+            web: webUrl,
+            stbUrl: getStbUrl(),
         };
     } catch (e) {
         return { success: false, error: e.message };

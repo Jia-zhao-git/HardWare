@@ -252,6 +252,10 @@ function registerMiscHandlers() {
     if (misc.write_script_file) ipcMain.handle('write_script_file', misc.write_script_file);
     if (misc.delete_script_file) ipcMain.handle('delete_script_file', misc.delete_script_file);
     if (misc.generateStabilityReport) ipcMain.handle('generate_stability_report', misc.generateStabilityReport);
+    if (misc.startStbServer) ipcMain.handle('start_stb_server', misc.startStbServer);
+    if (misc.stopStbServer) ipcMain.handle('stop_stb_server', misc.stopStbServer);
+    if (misc.getStbPort) ipcMain.handle('get_stb_port', misc.getStbPort);
+    if (misc.getStbUrl) ipcMain.handle('get_stb_url', misc.getStbUrl);
 }
 
 // ============================================================================
@@ -325,6 +329,13 @@ app.whenReady().then(() => {
     });
 
     registerAllHandlers();
+
+    // Start stability report HTTP server (online sharing)
+    misc.startStbServer().then(port => {
+        writeLog(`[MAIN] Stability server: http://localhost:${port}`);
+    }).catch(e => {
+        writeLog(`[MAIN] Stability server failed: ${e.message}`);
+    });
 
     // Start track-devices
     if (adb.startTrackDevices) adb.startTrackDevices();

@@ -240,9 +240,12 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
         // 自动生成曲线图报告
         addLog('[稳定性] 正在生成报告...')
         try {
-          const report = await invoke<{ success: boolean; html?: string; png?: string; error?: string }>('generate_stability_report', { sn: selectedDevice })
+          const report = await invoke<{ success: boolean; html?: string; png?: string; web?: string; error?: string }>('generate_stability_report', { sn: selectedDevice })
           if (report?.success) {
-            const reportMsg = `\n📊 报告已生成:\n  HTML: ${report.html || '无'}\n  PNG:  ${report.png || '无'}`
+            let reportMsg = `\n📊 报告已生成:\n  HTML: ${report.html || '无'}\n  PNG:  ${report.png || '无'}`
+            if (report.web) {
+              reportMsg += `\n  🔗 在线查看: ${report.web}`
+            }
             setStabilityResult(prev => prev ? prev + reportMsg : reportMsg)
             addLog('[稳定性] 报告生成成功')
           } else {
