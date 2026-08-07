@@ -210,11 +210,16 @@ let sy=false;charts.forEach(x=>x.on('datazoom',()=>{if(sy)return;const dz=x.getO
 // ==== PNG via Electron capture ====
 async function generatePNG(htmlPath, pngPath) {
     const { BrowserWindow } = require('electron');
-    const win = new BrowserWindow({ width:1400, height:900, show:false, webPreferences:{ nodeIntegration:false, contextIsolation:true } });
+    const win = new BrowserWindow({ width:1400, height:2000, show:false, webPreferences:{ nodeIntegration:false, contextIsolation:true } });
     try {
         await win.loadFile(htmlPath);
-        await new Promise(r => setTimeout(r, 3000));
-        const img = await win.webContents.capturePage();
+        await new Promise(r => setTimeout(r, 4000));
+        // Get actual content height
+        const bodyHeight = await win.webContents.executeJavaScript('document.body.scrollHeight');
+        win.setSize(1400, Math.min(bodyHeight + 40, 4000));
+        await new Promise(r => setTimeout(r, 1000));
+        const rect = { x:0, y:0, width:1400, height:Math.min(bodyHeight, 4000) };
+        const img = await win.webContents.capturePage(rect);
         fs.writeFileSync(pngPath, img.toPNG());
         return true;
     } catch(e) { console.error('[STB] PNG error:', e.message); return false; }
