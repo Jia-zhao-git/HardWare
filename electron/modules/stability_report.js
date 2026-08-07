@@ -211,13 +211,19 @@ function ls(name, data, color, area, stack) {
 
 // PID box
 const pidEl = document.getElementById('pidBox');
-const pidLines = [];
-${JSON.stringify(Object.entries(pids).map(([k,v]) => {
-    if (v.stable) return `${k}: PID=${v.first} (stable)`;
-    return v.changes.map(c => `${k}: PID ${c.old}->${c.pid} @${c.elapsed} (${c.pid===0?'DIED':'CRASH'})`).join('\n');
-}).join('\n'))}
-pidEl.innerHTML = pidLines.join('<br>');
-pidEl.className = crashCount > 0 ? 'pid-box crash' : 'pid-box stable';
+const pidsData = ${JSON.stringify(pids, null, 0)};
+const lines = [];
+for (const [name, info] of Object.entries(pidsData)) {
+    if (info.stable) {
+        lines.push(name + ': PID=' + info.first + ' (stable)');
+    } else {
+        for (const c of info.changes) {
+            lines.push(name + ': PID ' + c.old + '->' + c.pid + ' @' + c.elapsed + ' (' + (c.pid===0?'DIED':'CRASH') + ')');
+        }
+    }
+}
+pidEl.innerHTML = lines.join('<br>');
+pidEl.className = ${crashCount} > 0 ? 'pid-box crash' : 'pid-box stable';
 
 function initChart(id, series, yLabel, stack) {
   const c = echarts.init(document.getElementById(id));
