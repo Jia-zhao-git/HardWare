@@ -237,7 +237,7 @@ function toggle(id){{const el=document.getElementById(id);el.style.display=el.st
 </body>
 </html>"""
 
-    out = os.path.join(os.path.dirname(base), '.html')
+    out = os.path.join(os.path.dirname(base), sn + '.html')
     with open(out, 'w', encoding='utf-8') as f:
         f.write(HTML)
     size_kb = os.path.getsize(out) // 1024
