@@ -212,4 +212,31 @@ module.exports = {
     read_script_file,
     write_script_file,
     delete_script_file,
+    generateStabilityReport,
 };
+
+async function generateStabilityReport(event, { sn }) {
+    const { execFile } = require('child_process');
+    try {
+        const scriptPath = 'D:\\ADB-TOOLS-V1.0\\.cowork-temp\\stability_batch.py';
+        const result = await new Promise((resolve, reject) => {
+            execFile('python3', [scriptPath], {
+                maxBuffer: 10 * 1024 * 1024,
+                timeout: 120000,
+            }, (error, stdout, stderr) => {
+                if (error) reject(error);
+                else resolve(stdout);
+            });
+        });
+        const snDir = path.join('D:\\HardWare\\Stableness', sn);
+        const htmlPath = path.join(snDir, 'stability_report.html');
+        const pngPath = path.join(snDir, 'stability_report.png');
+        return {
+            success: true,
+            html: fs.existsSync(htmlPath) ? htmlPath : null,
+            png: fs.existsSync(pngPath) ? pngPath : null,
+        };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}

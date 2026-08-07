@@ -237,6 +237,20 @@ export default function TestPage({ selectedDevice, showNotif }: Props) {
         try {
           await invoke('open_file_location', { filePath: resultPath })
         } catch (_) { /* 非关键 */ }
+        // 自动生成曲线图报告
+        addLog('[稳定性] 正在生成报告...')
+        try {
+          const report = await invoke<{ success: boolean; html?: string; png?: string; error?: string }>('generate_stability_report', { sn: selectedDevice })
+          if (report?.success) {
+            const reportMsg = `\n📊 报告已生成:\n  HTML: ${report.html || '无'}\n  PNG:  ${report.png || '无'}`
+            setStabilityResult(prev => prev ? prev + reportMsg : reportMsg)
+            addLog('[稳定性] 报告生成成功')
+          } else {
+            addLog('[稳定性] 报告生成: ' + (report?.error || '失败'))
+          }
+        } catch (rErr) {
+          addLog('[稳定性] 报告生成异常: ' + String(rErr))
+        }
       } else {
         const msg = `❌ 收集失败: ${r?.error || '未知错误'}`
         setStabilityResult(msg)

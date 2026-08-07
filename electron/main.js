@@ -251,6 +251,7 @@ function registerMiscHandlers() {
     if (misc.read_script_file) ipcMain.handle('read_script_file', misc.read_script_file);
     if (misc.write_script_file) ipcMain.handle('write_script_file', misc.write_script_file);
     if (misc.delete_script_file) ipcMain.handle('delete_script_file', misc.delete_script_file);
+    if (misc.generateStabilityReport) ipcMain.handle('generate_stability_report', misc.generateStabilityReport);
 }
 
 // ============================================================================
