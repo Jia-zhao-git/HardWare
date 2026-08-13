@@ -23,5 +23,6 @@ Thumbs.db
 # Temp
 temp/
 tmp/
+.cowork-temp/
 
 token-usage-report/
