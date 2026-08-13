@@ -43,6 +43,7 @@ export default function NovelReaderPage({ onBack }: Props) {
   const fileSizeRef = useRef(0)
   const pendingScrollRef = useRef(0)
   const prependingRef = useRef(false)
+  const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // 自定义：注释颜色 + 字号
   const [commentColor, setCommentColor] = useState('#0a0')
@@ -72,20 +73,37 @@ export default function NovelReaderPage({ onBack }: Props) {
     if (s) setFontSize(Number(s))
   }, [])
 
-  // 退出/卸载时保存阅读起始位置 + 滚动偏移
+  // 退出/卸载时兜底保存（onScroll 节流 100ms 内可能没写完）
   useEffect(() => {
     return () => {
-      if (novelMeta && readStartByteRef.current > 0) {
-        localStorage.setItem('adb_novel_last_byte', String(readStartByteRef.current))
-        localStorage.setItem('adb_novel_last_scroll', String(scrollRef.current?.scrollTop || 0))
+      if (scrollSaveTimerRef.current) {
+        clearTimeout(scrollSaveTimerRef.current)
+        // 立即执行节流中未完成的保存
+        const el = scrollRef.current
+        if (novelMeta && el && el.scrollHeight > 0) {
+          const scrollRatio = (el.scrollTop + el.clientHeight / 2) / el.scrollHeight
+          const loadedBytes = readEndByteRef.current - readStartByteRef.current
+          const viewportByte = Math.floor(readStartByteRef.current + scrollRatio * loadedBytes)
+          localStorage.setItem('adb_novel_last_byte', String(viewportByte))
+        } else if (novelMeta) {
+          localStorage.setItem('adb_novel_last_byte', String(readStartByteRef.current))
+        }
       }
     }
   }, [novelMeta])
 
   // 恢复滚动位置（等 codeLines 渲染完成后）
   useEffect(() => {
-    if (pendingScrollRef.current > 0 && scrollRef.current) {
-      scrollRef.current.scrollTop = pendingScrollRef.current
+    if (pendingScrollRef.current !== 0 && scrollRef.current) {
+      const el = scrollRef.current
+      if (pendingScrollRef.current === -1) {
+        // 滚到内容中部（viewportByte 对应的近似位置）
+        requestAnimationFrame(() => {
+          el.scrollTop = Math.floor(el.scrollHeight * 0.5 - el.clientHeight * 0.5)
+        })
+      } else {
+        el.scrollTop = pendingScrollRef.current
+      }
       pendingScrollRef.current = 0
     }
   }, [codeLines])
@@ -108,19 +126,21 @@ export default function NovelReaderPage({ onBack }: Props) {
     setLoading(false)
   }, [])
 
-  // 按精确字节恢复（不走百分比，避免精度丢失）
-  const restorePosition = useCallback(async (meta: NovelMeta, startByte: number) => {
+  // 按精确字节恢复（不走百分比；viewportByte 即视口中心字节，加载后 scrollTop=0 居顶）
+  const restorePosition = useCallback(async (meta: NovelMeta, viewportByte: number) => {
     setLoading(true)
-    const clampedStart = Math.max(0, Math.min(startByte, meta.fileSize - 1))
+    // 向前半个 chunk，让恢复后视口中心附近有内容，而不是从该字节顶部开始
+    const halfChunk = Math.floor(CHUNK_CHARS / 2)
+    const clampedStart = Math.max(0, Math.min(viewportByte - halfChunk, meta.fileSize - 1))
     try {
       const readLen = Math.min(CHUNK_CHARS, meta.fileSize - clampedStart)
       const endByte = clampedStart + readLen
       const content = await readFileRange(meta.filePath, clampedStart, endByte)
       readEndByteRef.current = endByte
       readStartByteRef.current = clampedStart
-      const savedScroll = Number(localStorage.getItem('adb_novel_last_scroll') || '0')
-      if (savedScroll > 0) pendingScrollRef.current = savedScroll
       setCodeLines(await generateMixedCode(content))
+      // 不再依赖像素 scrollTop，直接滚动到加载块中部（viewportByte 在块内的相对位置）
+      pendingScrollRef.current = -1  // 用 -1 标记：滚到中部
     } catch (e) {
       setNotification('读取失败: ' + String(e))
     }
@@ -182,14 +202,30 @@ export default function NovelReaderPage({ onBack }: Props) {
 
   // 滚动到底部触发加载 / 滚动到顶部加载之前内容
   const handleScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+
+    // 实时节流保存阅读位置（100ms 防抖）
+    // 用视口中部对应的字节偏移，而非像素坐标，切换 tab/窗口大小变化后也能精确恢复
+    if (scrollSaveTimerRef.current) clearTimeout(scrollSaveTimerRef.current)
+    scrollSaveTimerRef.current = setTimeout(() => {
+      const scrollHeight = el.scrollHeight
+      if (scrollHeight > 0) {
+        const scrollRatio = (el.scrollTop + el.clientHeight / 2) / scrollHeight
+        const loadedBytes = readEndByteRef.current - readStartByteRef.current
+        const viewportByte = Math.floor(readStartByteRef.current + scrollRatio * loadedBytes)
+        localStorage.setItem('adb_novel_last_byte', String(viewportByte))
+      } else {
+        localStorage.setItem('adb_novel_last_byte', String(readStartByteRef.current))
+      }
+    }, 100)
+
     if (!loading && readEndByteRef.current < fileSizeRef.current) {
-      const el = scrollRef.current
-      if (!el) return
       const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200
       if (nearBottom) appendNextChunk()
     }
     // 向上滚动接近顶部时预加载前面内容
-    if (scrollRef.current && scrollRef.current.scrollTop < 100 && readStartByteRef.current > 0) {
+    if (el.scrollTop < 100 && readStartByteRef.current > 0) {
       prependPrevChunk()
     }
   }, [loading, appendNextChunk, prependPrevChunk])
