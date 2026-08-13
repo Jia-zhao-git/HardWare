@@ -54,12 +54,15 @@ export default function NovelReaderPage({ onBack }: Props) {
   const [showFontPicker, setShowFontPicker] = useState(false)
   const [currentByte, setCurrentByte] = useState(0)
 
+  // 当前阅读字节 = 视口“顶部”对应的字节
+  // 必须与恢复逻辑 (el.scrollTop = ratio * scrollHeight) 保持同一基准，
+  // 否则每次保存/恢复都会累积半个视口的偏移（表现为切 tab progress 固定 +0.01%）
   const getViewportByte = useCallback(() => {
     const el = scrollRef.current
     const blockBytes = Math.max(1, readEndByteRef.current - readStartByteRef.current)
     if (!el || el.scrollHeight === 0) return readStartByteRef.current
 
-    const ratio = (el.scrollTop + el.clientHeight / 2) / el.scrollHeight
+    const ratio = el.scrollTop / el.scrollHeight
     const clampedRatio = Math.max(0, Math.min(1, ratio))
     return Math.floor(readStartByteRef.current + clampedRatio * blockBytes)
   }, [])
