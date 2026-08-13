@@ -41,15 +41,28 @@ export default function NovelReaderPage({ onBack }: Props) {
   const readEndByteRef = useRef(0)
   const readStartByteRef = useRef(0)
   const fileSizeRef = useRef(0)
-  const pendingScrollRef = useRef(0)
+  const pendingScrollRef = useRef(-1)
   const prependingRef = useRef(false)
   const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const currentByteRef = useRef(0)
+  const scrollRatioRef = useRef(0)
 
   // 自定义：注释颜色 + 字号
   const [commentColor, setCommentColor] = useState('#0a0')
   const [fontSize, setFontSize] = useState(12)
   const [showColorPicker, setShowColorPicker] = useState(false)
   const [showFontPicker, setShowFontPicker] = useState(false)
+  const [currentByte, setCurrentByte] = useState(0)
+
+  const getViewportByte = useCallback(() => {
+    const el = scrollRef.current
+    const blockBytes = Math.max(1, readEndByteRef.current - readStartByteRef.current)
+    if (!el || el.scrollHeight === 0) return readStartByteRef.current
+
+    const ratio = (el.scrollTop + el.clientHeight / 2) / el.scrollHeight
+    const clampedRatio = Math.max(0, Math.min(1, ratio))
+    return Math.floor(readStartByteRef.current + clampedRatio * blockBytes)
+  }, [])
 
   // 恢复
   useEffect(() => {
@@ -78,23 +91,21 @@ export default function NovelReaderPage({ onBack }: Props) {
     return () => {
       if (scrollSaveTimerRef.current) {
         clearTimeout(scrollSaveTimerRef.current)
-        const el = scrollRef.current
-        if (novelMeta) {
-          localStorage.setItem('adb_novel_last_byte', String(readStartByteRef.current))
-          if (el && el.scrollHeight > 0) {
-            localStorage.setItem('adb_novel_scroll_ratio', String(el.scrollTop / el.scrollHeight))
-          }
-        }
+      }
+      if (novelMeta) {
+        const viewportByte = getViewportByte()
+        localStorage.setItem('adb_novel_last_byte', String(viewportByte))
+        localStorage.setItem('adb_novel_scroll_ratio', String(scrollRatioRef.current))
       }
     }
-  }, [novelMeta])
+  }, [novelMeta, getViewportByte])
 
   // 恢复滚动位置（等 codeLines 渲染完成后）
   useEffect(() => {
-    if (pendingScrollRef.current !== 0 && scrollRef.current) {
+    if (pendingScrollRef.current >= 0 && scrollRef.current) {
       const el = scrollRef.current
       const ratio = pendingScrollRef.current
-      pendingScrollRef.current = 0
+      pendingScrollRef.current = -1
       // 用 rAF 确保 DOM 已绘制完成再设 scrollTop
       requestAnimationFrame(() => {
         el.scrollTop = ratio * el.scrollHeight
@@ -112,8 +123,14 @@ export default function NovelReaderPage({ onBack }: Props) {
       const content = await readFileRange(meta.filePath, startByte, endByte)
       readEndByteRef.current = endByte
       readStartByteRef.current = startByte
+      currentByteRef.current = startByte
+      setCurrentByte(startByte)
+      scrollRatioRef.current = 0
+      pendingScrollRef.current = -1
       setCodeLines(await generateMixedCode(content))
       scrollRef.current?.scrollTo(0, 0)
+      localStorage.setItem('adb_novel_last_byte', String(startByte))
+      localStorage.setItem('adb_novel_scroll_ratio', '0')
     } catch (e) {
       setNotification('读取失败: ' + String(e))
     }
@@ -123,16 +140,23 @@ export default function NovelReaderPage({ onBack }: Props) {
   // 按精确字节恢复（从块起点加载，再按比例恢复 scrollTop）
   const restorePosition = useCallback(async (meta: NovelMeta, startByte: number) => {
     setLoading(true)
-    const clampedStart = Math.max(0, Math.min(startByte, meta.fileSize - 1))
+    const clampedViewport = Math.max(0, Math.min(startByte, meta.fileSize - 1))
+    const clampedStart = Math.max(0, Math.min(clampedViewport - Math.floor(CHUNK_CHARS / 2), meta.fileSize - CHUNK_CHARS))
     try {
       const readLen = Math.min(CHUNK_CHARS, meta.fileSize - clampedStart)
       const endByte = clampedStart + readLen
       const content = await readFileRange(meta.filePath, clampedStart, endByte)
       readEndByteRef.current = endByte
       readStartByteRef.current = clampedStart
-      const savedRatio = Number(localStorage.getItem('adb_novel_scroll_ratio') || '0')
-      pendingScrollRef.current = savedRatio > 0 ? savedRatio : 0
+      const blockBytes = Math.max(1, endByte - clampedStart)
+      const clampedRatio = (clampedViewport - clampedStart) / blockBytes
+      pendingScrollRef.current = Math.max(0, Math.min(1, clampedRatio))
+      currentByteRef.current = clampedViewport
+      setCurrentByte(clampedViewport)
+      scrollRatioRef.current = pendingScrollRef.current
       setCodeLines(await generateMixedCode(content))
+      localStorage.setItem('adb_novel_last_byte', String(clampedViewport))
+      localStorage.setItem('adb_novel_scroll_ratio', String(pendingScrollRef.current))
     } catch (e) {
       setNotification('读取失败: ' + String(e))
     }
@@ -201,11 +225,14 @@ export default function NovelReaderPage({ onBack }: Props) {
     // 保存块起点字节（精确）+ scrollTop/scrollHeight 比例（0~1）
     if (scrollSaveTimerRef.current) clearTimeout(scrollSaveTimerRef.current)
     scrollSaveTimerRef.current = setTimeout(() => {
-      localStorage.setItem('adb_novel_last_byte', String(readStartByteRef.current))
+      const viewportByte = getViewportByte()
+      currentByteRef.current = viewportByte
+      setCurrentByte(viewportByte)
       if (el.scrollHeight > 0) {
-        const ratio = el.scrollTop / el.scrollHeight
-        localStorage.setItem('adb_novel_scroll_ratio', String(ratio))
+        scrollRatioRef.current = el.scrollTop / el.scrollHeight
       }
+      localStorage.setItem('adb_novel_last_byte', String(viewportByte))
+      localStorage.setItem('adb_novel_scroll_ratio', String(scrollRatioRef.current))
     }, 100)
 
     if (!loading && readEndByteRef.current < fileSizeRef.current) {
@@ -216,7 +243,7 @@ export default function NovelReaderPage({ onBack }: Props) {
     if (el.scrollTop < 100 && readStartByteRef.current > 0) {
       prependPrevChunk()
     }
-  }, [loading, appendNextChunk, prependPrevChunk])
+  }, [loading, appendNextChunk, prependPrevChunk, getViewportByte])
 
   const jumpToPercent = (pct: number) => {
     if (!novelMeta) return
@@ -228,15 +255,15 @@ export default function NovelReaderPage({ onBack }: Props) {
   const [inputPct, setInputPct] = useState('0.00')
   const [showPctInput, setShowPctInput] = useState(false)
   useEffect(() => {
-    if (novelMeta && readEndByteRef.current > 0) {
-      const pct = (readEndByteRef.current / novelMeta.fileSize) * 100
+    if (novelMeta && novelMeta.fileSize > 0) {
+      const pct = (currentByte / novelMeta.fileSize) * 100
       setSliderPos(Math.round(pct))
       setInputPct(pct.toFixed(2))
     } else {
       setSliderPos(0)
       setInputPct('0.00')
     }
-  }, [novelMeta, codeLines])
+  }, [novelMeta, currentByte])
 
   const handleSlider = (e: React.ChangeEvent<HTMLInputElement>) =>
     setSliderPos(Number(e.target.value))
@@ -272,6 +299,10 @@ export default function NovelReaderPage({ onBack }: Props) {
       fileSizeRef.current = result.fileSize
       readEndByteRef.current = result.previewBytes ?? Math.min(CHUNK_CHARS, result.fileSize)
       readStartByteRef.current = 0
+      currentByteRef.current = 0
+      scrollRatioRef.current = 0
+      pendingScrollRef.current = -1
+      setCurrentByte(0)
       setSliderPos(0)
       if (result.preview) setCodeLines(await generateMixedCode(result.preview))
       setShowNovel(true)
@@ -293,6 +324,9 @@ export default function NovelReaderPage({ onBack }: Props) {
     readEndByteRef.current = 0
     readStartByteRef.current = 0
     fileSizeRef.current = 0
+    currentByteRef.current = 0
+    scrollRatioRef.current = 0
+    setCurrentByte(0)
     setSliderPos(0)
   }
 
