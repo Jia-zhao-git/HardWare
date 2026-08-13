@@ -52,7 +52,6 @@ export default function HistoryPage({ onSecretPage }: Props) {
 
   const categories = [...new Set(history.map(h => h.category))]
 
-  // 三连击"设备"按钮触发隐藏页面
   const handleDeviceClick = () => {
     clickCountRef.current += 1
     if (clickTimerRef.current) clearTimeout(clickTimerRef.current)
