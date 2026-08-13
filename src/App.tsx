@@ -50,9 +50,9 @@ const NAV_ITEMS = [
   { id: 'files' as Page, label: '文件管理', icon: FolderOpen, shortcut: '5', color: '#8b5cf6', desc: '浏览设备文件系统' },
   { id: 'script' as Page, label: '脚本编辑', icon: FileCode, shortcut: '6', color: '#ef4444', desc: '可视化脚本编辑与执行' },
   { id: 'test' as Page, label: '测试套件', icon: FlaskConical, shortcut: '7', color: '#ec4899', desc: '稳定性、功耗测试' },
-  { id: 'uitest' as Page, label: 'UI 自动化', icon: Activity, shortcut: '0', color: '#e94560', desc: 'UI 自动化测试，点击即运行' },
-  { id: 'tools' as Page, label: '工具箱', icon: Wrench, shortcut: '8', color: '#06b6d4', desc: '截图、WiFi、固件等工具' },
-  { id: 'history' as Page, label: '历史记录', icon: History, shortcut: '9', color: '#64748b', desc: '操作历史' },
+  { id: 'uitest' as Page, label: 'UI 自动化', icon: Activity, shortcut: '8', color: '#e94560', desc: 'UI 自动化测试，点击即运行' },
+  { id: 'tools' as Page, label: '工具箱', icon: Wrench, shortcut: '9', color: '#06b6d4', desc: '截图、WiFi、固件等工具' },
+  { id: 'history' as Page, label: '历史记录', icon: History, shortcut: '', color: '#64748b', desc: '操作历史' },
 ]
 
 const winMinimize = () => invoke<{}>('window_minimize', {})
@@ -384,20 +384,25 @@ function App() {
         )}
 
         <div className="sidebar-nav">
-          {NAV_ITEMS.map(item => (
-            <div
-              key={item.id}
-              className={`nav-item ${activePage === item.id ? 'active' : ''}`}
-              onClick={() => setActivePage(item.id)}
-              title={item.desc}
-            >
-              <span className="nav-icon" style={{ color: activePage === item.id ? item.color : undefined }}>
-                <item.icon size={18} />
-              </span>
-              <span className="nav-label">{item.label}</span>
-              <span className="nav-shortcut">{item.shortcut}</span>
-            </div>
-          ))}
+          {NAV_ITEMS.map((item, idx) => {
+            // Derive the badge from the nav index so it always matches the
+            // Ctrl+N handler above (which maps key N to NAV_ITEMS[N-1]).
+            const shortcutKey = idx < 9 ? String(idx + 1) : ''
+            return (
+              <div
+                key={item.id}
+                className={`nav-item ${activePage === item.id ? 'active' : ''}`}
+                onClick={() => setActivePage(item.id)}
+                title={shortcutKey ? `${item.desc} (Ctrl+${shortcutKey})` : item.desc}
+              >
+                <span className="nav-icon" style={{ color: activePage === item.id ? item.color : undefined }}>
+                  <item.icon size={18} />
+                </span>
+                <span className="nav-label">{item.label}</span>
+                <span className="nav-shortcut">{shortcutKey}</span>
+              </div>
+            )
+          })}
         </div>
 
         {deviceInfo && (
